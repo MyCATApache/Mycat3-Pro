@@ -1,0 +1,13 @@
+# 构建产物
+/target
+**/*.rs.bk
+*.pid
+*.log
+logs/
+
+# 本地测试环境（含测试证书/私钥/数据库口令，绝不入库）
+/.smoke-*/
+/.zcode/
+
+# 运行数据（mycat home 的缓存/备份）
+mycat-home/

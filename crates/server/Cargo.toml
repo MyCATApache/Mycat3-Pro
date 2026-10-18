@@ -1,0 +1,42 @@
+[package]
+name = "mycat3-server"
+description = "Mycat3 Pro frontend server: sessions, execution engine, admin commands"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+mycat3-protocol = { path = "../protocol" }
+mycat3-config = { path = "../config" }
+mycat3-router = { path = "../router" }
+mycat3-sql = { path = "../sql" }
+mycat3-client = { path = "../client" }
+mycat3-replica = { path = "../replica" }
+mycat3-oracle = { path = "../oracle" }
+mycat3-pgclient = { path = "../pgclient" }
+sqlparser.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+memmap2.workspace = true
+rustls.workspace = true
+regex.workspace = true
+tokio-rustls.workspace = true
+rustls-pemfile.workspace = true
+rand.workspace = true
+md5.workspace = true
+chrono.workspace = true
+
+[[bin]]
+name = "mycat3-pro"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = "3"

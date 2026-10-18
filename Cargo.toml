@@ -1,0 +1,75 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pgclient",
+    "crates/protocol",
+    "crates/config",
+    "crates/router",
+    "crates/sql",
+    "crates/client",
+    "crates/replica",
+    "crates/server",
+    "crates/oracle",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "GPL-3.0"
+authors = ["Mycat Community"]
+repository = "https://github.com/mycatparser/Mycat3"
+
+[workspace.dependencies]
+# internal crates
+mycat3-protocol = { path = "crates/protocol" }
+mycat3-config = { path = "crates/config" }
+mycat3-router = { path = "crates/router" }
+mycat3-sql = { path = "crates/sql" }
+mycat3-client = { path = "crates/client" }
+mycat3-replica = { path = "crates/replica" }
+mycat3-oracle = { path = "crates/oracle" }
+
+# async runtime
+tokio = { version = "1", features = ["full"] }
+
+# serialization / config
+serde = { version = "1", features = ["derive"] }
+memmap2 = "0.9"
+rustls = "0.23"
+tokio-rustls = "0.26"
+rustls-pemfile = "2"
+tokio-postgres = "0.7"
+postgres-types = "0.2"
+serde_json = { version = "1", features = ["preserve_order"] }
+
+# sql parsing
+sqlparser = { version = "0.53", features = ["visitor"] }
+
+# crypto / hash
+sha1 = "0.10"
+sha2 = "0.10"
+rand = "0.8"
+crc32fast = "1"
+md5 = "0.7"
+
+# date/time
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+
+# logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# error handling
+thiserror = "2"
+anyhow = "1"
+
+# misc
+regex = "1"
+clap = { version = "4", features = ["derive"] }
+parking_lot = "0.12"
+bytes = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

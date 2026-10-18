@@ -1,0 +1,51 @@
+# Mycat3 Pro 演示环境：1 主 1 从 MySQL + Mycat3 Pro
+# 启动: docker compose up -d
+# 连接: mysql -h 127.0.0.1 -P 8066 -uroot -p123456
+version: "3.8"
+
+services:
+  mysql-master:
+    image: mysql:8.0
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --server-id=1 --log-bin=mysql-bin --binlog-format=ROW
+      --gtid-mode=ON --enforce-gtid-consistency=ON
+    environment:
+      MYSQL_ROOT_PASSWORD: mysql_root_pw
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-pmysql_root_pw"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - ./docker/init-master.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  mysql-replica:
+    image: mysql:8.0
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --server-id=2 --log-bin=mysql-bin --binlog-format=ROW
+      --gtid-mode=ON --enforce-gtid-consistency=ON
+      --read-only=ON --super-read-only=OFF
+    environment:
+      MYSQL_ROOT_PASSWORD: mysql_root_pw
+    depends_on:
+      mysql-master:
+        condition: service_healthy
+    volumes:
+      - ./docker/init-replica.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  mycat3-pro:
+    build: .
+    image: mycat3-pro:latest
+    ports:
+      - "8066:8066"   # MySQL 协议端口
+      - "9066:9066"   # 监控 HTTP 端口
+    environment:
+      # 容器内 conf 覆盖：数据源指向 compose 服务名
+      MYCAT3_PRO_HOME: /opt/mycat3-pro/conf
+    volumes:
+      - ./docker/conf:/opt/mycat3-pro/conf
+    depends_on:
+      mysql-master:
+        condition: service_healthy

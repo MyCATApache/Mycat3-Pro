@@ -1,0 +1,19 @@
+[package]
+name = "mycat3-sql"
+description = "SQL analysis, sharding-route planning and rewriting for Mycat3 Pro"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+mycat3-config = { path = "../config" }
+mycat3-router = { path = "../router" }
+sqlparser.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

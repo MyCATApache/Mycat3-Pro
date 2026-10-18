@@ -1,0 +1,19 @@
+[package]
+name = "mycat3-replica"
+description = "Replica selection, load balance and heartbeat HA for Mycat3 Pro"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+mycat3-config = { path = "../config" }
+mycat3-client = { path = "../client" }
+mycat3-oracle = { path = "../oracle" }
+mycat3-pgclient = { path = "../pgclient" }
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+parking_lot.workspace = true
+rand.workspace = true
+mycat3-protocol = { path = "../protocol" }

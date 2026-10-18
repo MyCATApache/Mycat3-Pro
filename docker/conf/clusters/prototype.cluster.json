@@ -1,0 +1,17 @@
+{
+  "name": "prototype",
+  "clusterType": "MASTER_SLAVE",
+  "switchType": "NOT_SWITCH",
+  "readBalanceType": "BALANCE_NONE",
+  "masters": [
+    "ds0"
+  ],
+  "replicas": [],
+  "heartbeat": {
+    "maxRetry": 3,
+    "minSwitchTimeInterval": 300,
+    "heartbeatTimeout": 1000,
+    "slaveThreshold": 0
+  },
+  "maxCon": 100
+}

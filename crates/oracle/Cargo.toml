@@ -1,0 +1,15 @@
+[package]
+name = "mycat3-oracle"
+description = "Oracle backend for Mycat3 Pro (official rust-oracledb driver wrapper)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+mycat3-protocol = { path = "../protocol" }
+oracledb = "26.0.0-beta.4"
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true

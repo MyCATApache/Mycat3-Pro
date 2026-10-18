@@ -1,0 +1,16 @@
+{
+  "name": "ds1",
+  "url": "jdbc:mysql://mysql-replica:3306/db1_1?useUnicode=true&characterEncoding=UTF-8",
+  "user": "root",
+  "password": "mysql_root_pw",
+  "dbType": "mysql",
+  "weight": 1,
+  "maxCon": 1000,
+  "minCon": 1,
+  "maxRetryCount": 5,
+  "maxConnectTimeout": 30000,
+  "initSqls": [],
+  "instanceType": "READ_WRITE",
+  "idleTimeout": 60000,
+  "type": "NATIVE"
+}

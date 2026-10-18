@@ -1,0 +1,91 @@
+{
+  "schemaName": "db1",
+  "targetName": "c0",
+  "shardingTables": {
+    "orders": {
+      "createTableSQL": "CREATE TABLE orders(id BIGINT PRIMARY KEY, name VARCHAR(64), created DATETIME)",
+      "partition": {
+        "data": [
+          [
+            "ds0",
+            "db1_0",
+            "orders_0"
+          ],
+          [
+            "ds0",
+            "db1_0",
+            "orders_1"
+          ],
+          [
+            "ds1",
+            "db1_1",
+            "orders_2"
+          ],
+          [
+            "ds1",
+            "db1_1",
+            "orders_3"
+          ]
+        ]
+      },
+      "function": {
+        "clazz": "io.mycat.router.mycat1xfunction.PartitionByMod",
+        "properties": {
+          "columnName": "id",
+          "count": "4"
+        }
+      }
+    },
+    "events": {
+      "createTableSQL": "CREATE TABLE events(id BIGINT PRIMARY KEY, created DATETIME)",
+      "partition": {
+        "targetNames": [
+          "ds0",
+          "ds1"
+        ],
+        "schemaNames": [
+          "db1_0",
+          "db1_1"
+        ],
+        "tableNames": [
+          "events_$0-1"
+        ]
+      },
+      "function": {
+        "properties": {
+          "dbNum": "2",
+          "tableNum": "2",
+          "storeNum": "2",
+          "mappingFormat": "ds${targetIndex}/db1_${dbIndex}/events_${tableIndex}",
+          "dbMethod": "hash(id)",
+          "tableMethod": "hash(id)"
+        }
+      }
+    }
+  },
+  "globalTables": {
+    "dict": {
+      "createTableSQL": "CREATE TABLE dict(id BIGINT PRIMARY KEY, name VARCHAR(64))",
+      "broadcast": [
+        {
+          "targetName": "ds0",
+          "schemaName": "db1_0"
+        },
+        {
+          "targetName": "ds1",
+          "schemaName": "db1_1"
+        }
+      ]
+    }
+  },
+  "normalTables": {
+    "user_info": {
+      "createTableSQL": "CREATE TABLE user_info(id BIGINT PRIMARY KEY, name VARCHAR(64))",
+      "locality": {
+        "targetName": "ds0",
+        "schemaName": "db1_0",
+        "tableName": "user_info"
+      }
+    }
+  }
+}

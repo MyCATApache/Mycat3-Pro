@@ -1,0 +1,17 @@
+[package]
+name = "mycat3-client"
+description = "Native async MySQL backend client and connection pool for Mycat3 Pro"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+mycat3-protocol = { path = "../protocol" }
+mycat3-config = { path = "../config" }
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+parking_lot.workspace = true
+bytes.workspace = true
+rand.workspace = true

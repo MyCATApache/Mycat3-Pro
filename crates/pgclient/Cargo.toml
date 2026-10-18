@@ -1,0 +1,16 @@
+[package]
+name = "mycat3-pgclient"
+description = "PostgreSQL backend client (tokio-postgres based) for Mycat3 Pro"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+mycat3-protocol = { path = "../protocol" }
+tokio.workspace = true
+tokio-postgres.workspace = true
+postgres-types.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true

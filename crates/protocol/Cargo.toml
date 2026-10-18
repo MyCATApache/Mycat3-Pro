@@ -1,0 +1,15 @@
+[package]
+name = "mycat3-protocol"
+description = "MySQL client/server protocol codec for Mycat3 Pro (handshake, auth, packets, framing)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+bytes.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

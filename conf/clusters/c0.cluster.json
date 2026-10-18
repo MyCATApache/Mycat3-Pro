@@ -1,0 +1,15 @@
+{
+  "name": "c0",
+  "clusterType": "MASTER_SLAVE",
+  "switchType": "SWITCH",
+  "readBalanceType": "BALANCE_ALL",
+  "masters": ["ds0"],
+  "replicas": ["ds1"],
+  "heartbeat": {
+    "maxRetry": 3,
+    "minSwitchTimeInterval": 300,
+    "heartbeatTimeout": 1000,
+    "slaveThreshold": 0
+  },
+  "maxCon": 2000
+}
