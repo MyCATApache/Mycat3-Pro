@@ -254,7 +254,6 @@ pub fn substitute_question_params(template: &str, values: &[String]) -> Option<S
 pub fn substitute_dollar_params(template: &str, values: &[String]) -> Option<String> {
     let mut out = String::with_capacity(template.len() + values.len() * 8);
     let bytes = template.as_bytes();
-    let mut idx = 0;
     let mut i = 0;
     let mut seg = 0;
     while i < bytes.len() {
@@ -285,7 +284,6 @@ pub fn substitute_dollar_params(template: &str, values: &[String]) -> Option<Str
                 }
                 out.push_str(&template[seg..i]);
                 out.push_str(&quote_untyped(&values[n - 1]));
-                idx += 1;
                 i = j;
                 seg = i;
             }

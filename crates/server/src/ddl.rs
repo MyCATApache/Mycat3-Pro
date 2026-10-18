@@ -1884,29 +1884,6 @@ async fn drop_view(
     })
 }
 
-/// CREATE VIEW 加库限定：`CREATE VIEW v AS ...` → `CREATE VIEW `db`.`v` AS ...`
-///（已带库限定则原样；sqlparser 解析后的 AST 重序列化会保反引号）。
-fn qualify_view_name(sql: &str, schema: &str, view_name: &str) -> String {
-    let body = sql.trim().trim_end_matches(';').trim();
-    // 视图名出现在 "CREATE [OR REPLACE] [ALGORITHM=...] [DEFINER=...] VIEW 名" 之后：
-    // 用 AST 重写最稳（0.53 CreateView.name 可设置库限定）
-    if let Ok(mut stmts) =
-        sqlparser::parser::Parser::parse_sql(&sqlparser::dialect::MySqlDialect {}, body)
-    {
-        if let Some(sqlparser::ast::Statement::CreateView { name, .. }) = stmts.first_mut() {
-            if name.0.len() == 1 {
-                let n = name.0[0].value.clone();
-                *name = sqlparser::ast::ObjectName(vec![
-                    sqlparser::ast::Ident::new(schema.to_string()),
-                    sqlparser::ast::Ident::new(n),
-                ]);
-                return stmts[0].to_string();
-            }
-        }
-    }
-    body.to_string()
-}
-
 /// 视图定义规范化：剥离数据库限定（视图元数据以逻辑视图名为键）。
 fn normalize_view_sql(sql: &str, view_name: &str) -> String {
     let body = sql.trim().trim_end_matches(';').trim();

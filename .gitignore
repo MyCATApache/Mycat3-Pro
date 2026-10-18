@@ -1,5 +1,6 @@
 # 构建产物
 /target
+/dist/
 **/*.rs.bk
 *.pid
 *.log

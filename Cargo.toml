@@ -13,11 +13,11 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.0"
+version = "0.3.0"
 edition = "2021"
 license = "GPL-3.0"
 authors = ["Mycat Community"]
-repository = "https://github.com/mycatparser/Mycat3"
+repository = "https://github.com/MyCATApache/Mycat3-Pro"
 
 [workspace.dependencies]
 # internal crates

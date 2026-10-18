@@ -1257,7 +1257,6 @@ fn route_select(
             ResolvedKind::Normal { target, .. } => Some(target.clone()),
             ResolvedKind::Passthrough { target } => Some(target.clone()),
             ResolvedKind::View { target } => Some(target.clone()),
-            ResolvedKind::View { target } => Some(target.clone()),
             ResolvedKind::Global { .. } => None,
             ResolvedKind::Sharding { .. } => None,
         })

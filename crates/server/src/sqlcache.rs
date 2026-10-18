@@ -870,7 +870,7 @@ impl SqlCacheManager {
 
     /// DML/DDL 写入后使相关缓存失效（启发式：模板 SQL 含该表名 token 即失效；
     /// 失效 = 清内存结果 + 删缓存文件，保守安全——宁可多失效不可给旧数据）。
-    pub fn invalidate_table(&self, schema: &str, table: &str) {
+    pub fn invalidate_table(&self, _schema: &str, table: &str) {
         let t = table.to_lowercase();
         for entry in self.entries.read().values() {
             let sql_l = entry.cfg.sql.to_lowercase();

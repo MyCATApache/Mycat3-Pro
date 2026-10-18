@@ -4,12 +4,27 @@
 
 Mycat3 Pro 是对 [Mycat3](https://github.com/mycatparser/Mycat3)（Java 版分布式数据库中间件）的 Rust 语言重新实现。它保留了 Mycat3 的核心架构与配置格式（JSON 多文件配置可直接复用），以 tokio 异步运行时替代 Vert.x，以 sqlparser 替代 Druid/Calcite，提供 MySQL 协议代理、数据分片、读写分离、心跳高可用与可观测能力。
 
-- **269 个单元/集成测试全部通过**（协议编解码、17 种分片算法、SQL 路由、连接池、负载均衡、心跳切换、DDL 自动化、端到端全链路）
+- **342 个单元/集成测试全部通过**（协议编解码、17 种分片算法、SQL 路由、连接池、负载均衡、心跳切换、DDL 自动化、端到端全链路）
 - **DDL 配置自动化**：一条 `CREATE TABLE ... DBPARTITION BY hash(id) TBPARTITIONS 2 ...` 自动完成
   分片配置生成、物理建库建表、元数据热更新（与 Java 版 MycatRouterConfigOps 同语义）
 - **多协议同端口**（与 Java 版一致的字节级嗅探）：8066 端口同时服务 MySQL、PostgreSQL、SQL Server(TDS) 客户端；**真实客户端验证**：mysql CLI、psql 16（含扩展查询协议参数绑定）、sqlcmd/ODBC 同端口读写同一分片集群
 - **真实双 MySQL 8.0 实例冒烟验证**：空实例上 DDL 自动化建库建分片表、Snowflake 自增填充与路由、跨分片 ORDER BY+LIMIT 归并、COUNT 聚合归并、广播表双实例同步（insert/update/delete/drop）、事务+SAVEPOINT、热重载、AutoFunction、错误密码拒绝、并发查询；mysql/psql/sqlcmd 三协议客户端均可驱动全部特性
 - 单一静态二进制，无 JVM 依赖，内存占用为 Java 版的零头
+
+## 下载
+
+预编译二进制与源码见 [Releases](https://github.com/MyCATApache/Mycat3-Pro/releases)：
+
+| 平台 | 资产 |
+|---|---|
+| Linux x86_64 | `mycat3-pro-v0.3.0-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux arm64 | `mycat3-pro-v0.3.0-aarch64-unknown-linux-gnu.tar.gz` |
+| Windows x64 | `mycat3-pro-v0.3.0-x86_64-pc-windows-msvc.zip` |
+| Windows arm64 | `mycat3-pro-v0.3.0-aarch64-pc-windows-msvc.zip` |
+| 源码 | `mycat3-pro-v0.3.0-source.tar.gz`（另附 GitHub 自动源码包） |
+
+本地交叉编译：`scripts/build-release.sh [VERSION] [TARGET...]`；
+CI（tag 触发）见 `.github/workflows/release.yml`。
 
 ---
 
