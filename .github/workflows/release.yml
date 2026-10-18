@@ -108,6 +108,7 @@ jobs:
           cp -r conf "$stage"/conf
           cp "target/${{ matrix.target }}/release/mycat3-pro" "$stage"/
           tar -czf "dist/mycat3-pro-${V}-${{ matrix.target }}.tar.gz" -C "$stage" .
+          rm -rf "$stage"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -121,6 +122,7 @@ jobs:
           Copy-Item -Recurse conf "$stage/conf"
           Copy-Item "target/${{ matrix.target }}/release/mycat3-pro.exe" $stage
           Compress-Archive -Path "$stage/*" -DestinationPath "dist/mycat3-pro-$v-${{ matrix.target }}.zip"
+          Remove-Item -Recurse -Force $stage
 
       - uses: actions/upload-artifact@v4
         with:
