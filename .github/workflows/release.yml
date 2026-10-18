@@ -47,7 +47,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $hostArch = if ("${{ matrix.arch }}" -eq "arm64") { "HostARM64\ARM64" } else { "Hostx64\x64" }
+          # x64 主机构建 ARM64 目标使用 Hostx64\arm64（x64 宿主的 ARM64 交叉工具）；
+          # HostARM64\ARM64 仅在 ARM64 主机/安装了原生 ARM64 工具链时存在
+          $hostArch = if ("${{ matrix.arch }}" -eq "arm64") { "Hostx64\arm64" } else { "Hostx64\x64" }
           $link = $null
           # vcvars 设置的工具目录最可靠
           if ($env:VCToolsInstallDir) {
@@ -69,7 +71,13 @@ jobs:
                  Where-Object { $_.Source -like "*$hostArch*" } | Select-Object -First 1
             if ($c) { $link = $c.Source }
           }
-          if (-not $link) { throw "MSVC link.exe not found ($hostArch)" }
+          if (-not $link) {
+            $dirs = @()
+            if ($env:VCToolsInstallDir) {
+              $dirs = Get-ChildItem -Path (Join-Path $env:VCToolsInstallDir "bin") -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+            }
+            throw "MSVC link.exe not found ($hostArch); bin dirs: $($dirs -join ', ')"
+          }
           $envName = if ("${{ matrix.target }}" -eq "aarch64-pc-windows-msvc") { "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER" } else { "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER" }
           "$envName=$link" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "pinned $envName=$link"
