@@ -4,6 +4,11 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      only:
+        description: "仅构建指定 target（留空=全部）"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -11,6 +16,7 @@ permissions:
 jobs:
   build:
     name: build ${{ matrix.target }}
+    if: github.event_name != 'workflow_dispatch' || inputs.only == '' || inputs.only == matrix.target
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -47,14 +53,32 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vs = & $vswhere -latest -products * -property installationPath
           $hostArch = if ("${{ matrix.arch }}" -eq "arm64") { "HostARM64\ARM64" } else { "Hostx64\x64" }
-          $link = Get-ChildItem -Path "$vs\VC\Tools\MSVC\*\bin\$hostArch\link.exe" | Select-Object -First 1
+          $link = $null
+          # vcvars 设置的工具目录最可靠
+          if ($env:VCToolsInstallDir) {
+            $p = Join-Path $env:VCToolsInstallDir "bin\$hostArch\link.exe"
+            if (Test-Path $p) { $link = $p }
+          }
+          if (-not $link) {
+            $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+            if (Test-Path $vswhere) {
+              $vs = (& $vswhere -latest -products * -property installationPath).Trim()
+              if ($vs) {
+                $p = Get-ChildItem -Path "$vs\VC\Tools\MSVC\*\bin\$hostArch\link.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($p) { $link = $p.FullName }
+              }
+            }
+          }
+          if (-not $link) {
+            $c = Get-Command link.exe -All -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Source -like "*$hostArch*" } | Select-Object -First 1
+            if ($c) { $link = $c.Source }
+          }
           if (-not $link) { throw "MSVC link.exe not found ($hostArch)" }
           $envName = if ("${{ matrix.target }}" -eq "aarch64-pc-windows-msvc") { "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER" } else { "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER" }
-          "$envName=$($link.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "pinned $envName=$($link.FullName)"
+          "$envName=$link" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "pinned $envName=$link"
 
       - name: Install aarch64 Linux cross compiler
         if: matrix.target == 'aarch64-unknown-linux-gnu'
