@@ -4,11 +4,6 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      only:
-        description: "仅构建指定 target（留空=全部）"
-        required: false
-        default: ""
 
 permissions:
   contents: write
@@ -16,7 +11,6 @@ permissions:
 jobs:
   build:
     name: build ${{ matrix.target }}
-    if: github.event_name != 'workflow_dispatch' || inputs.only == '' || inputs.only == matrix.target
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
