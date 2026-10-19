@@ -15,6 +15,7 @@ Mycat3 Pro v0.3.0 的后端驱动只有三种：
 因此本目录演示的是 **SQL Server 客户端（sqlcmd / TDS）→ Mycat3 Pro → MySQL 后端**，
 不是“SQL Server 作为后端”。SQL Server 后端需要新增 TDS 客户端驱动 + T-SQL→MySQL/PG
 方言层，属于新的后端项目，不在当前版本范围内；本示例不会伪装成已支持。
+代价与实施方案见 [SQL Server 后端接入评估](../../../docs/sqlserver-backend-feasibility.md)。
 
 TDS 前端与 MySQL/PG 前端共享同一执行引擎，所以分片、广播、归并、管理命令、
 XA（后端支持时）完全一致，区别只在协议编解码和少量 T-SQL 改写。

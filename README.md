@@ -209,6 +209,7 @@ conf/
 - [docs/docker.md](docs/docker.md) — Docker 镜像使用指南（两种模式、TLS、多后端、多架构）
 - [docs/performance.md](docs/performance.md) — 性能参数、容量预算、场景区间与调优顺序
 - [examples/docker/README.md](examples/docker/README.md) — Compose 示例库（代理/分片/多后端/性能）
+- [docs/sqlserver-backend-feasibility.md](docs/sqlserver-backend-feasibility.md) — SQL Server 后端（TDS 客户端 + T-SQL 方言）代价与实施方案
 
 ## 与 Java 版的主要差异
 

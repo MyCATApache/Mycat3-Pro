@@ -27,7 +27,8 @@ docker build -t mycat/mycat3-pro:latest .
 v0.3.0 的后端只有 **MySQL / PostgreSQL / Oracle**。SQL Server 是**前端 TDS 协议**，
 不是后端 `dbType`；[`tds-frontend`](tds-frontend/README.md) 演示的是
 “SQL Server 客户端 → Mycat → MySQL”，不是“SQL Server 作为数据源”。
-SQL Server 后端需要新增 TDS 客户端驱动和 T-SQL 方言层，当前版本明确不支持。
+SQL Server 后端需要新增 TDS 客户端驱动和 T-SQL 方言层，当前版本明确不支持；
+代价与实施方案见 [docs/sqlserver-backend-feasibility.md](../../docs/sqlserver-backend-feasibility.md)。
 
 ## 通用约定
 
