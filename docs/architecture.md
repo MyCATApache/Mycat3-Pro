@@ -12,7 +12,7 @@ Mycat3 Pro 是一个 Cargo workspace，8 个 crate 按依赖方向分层：
 │   bootstrap  TCP 监听/连接分发      state   全局服务注册表   │
 │   frontend   握手认证/命令循环      commands 本地 SQL 命令   │
 │   executor   后端执行/结果归并      tx      事务会话        │
-│   backend    BackendPool 双后端分派（MySql/Oracle）        │
+│   backend    BackendPool 多后端分派（MySQL/PG/Oracle/MSSQL）│
 │   monitor    HTTP 监控                                     │
 ├───────────────┬───────────────────────────────────────────┤
 │ sql           │ replica                 │ oracle          │
@@ -139,6 +139,18 @@ UTF-16LE 语义、Google Jump Consistent Hash、CRC-32、1024 槽段表）均按
 - TDS 前端适配：`SELECT [ALL|DISTINCT] TOP (n)` 在 TDS 会话层改写为 `LIMIT n`
   （多语句批中 LIMIT 归属首语句；PERCENT/WITH TIES 不支持）。
 - 边界：不支持 ANO 原生加密（TLS 可用）；跨 MySQL+Oracle 混合事务不保证原子性（无 XA）。
+
+### 4.7 SQL Server 后端（dbType=mssql/sqlserver）
+- 客户端：`crates/mssql` 薄封装 `tiberius` TDS 驱动（SQL 认证/TLS），自研信号量池
+  （maxCon/minCon/idleTimeout/免 ping 窗口），结果映射为文本行模型；不改变归并/三前端回写。
+- 方言：`sql::mssql::translate_sql`：`[bracket]` 标识符、`LIMIT`→`TOP`/`OFFSET … FETCH NEXT`、
+  常用函数/布尔映射；upsert/REPLACE/`DELETE LIMIT`/`FOR UPDATE`/REGEXP 等显式拒绝。
+- 事务：`SET autocommit=0`→`BEGIN TRAN`、`1`→`COMMIT`；`BEGIN/COMMIT/ROLLBACK`、
+  `SAVEPOINT`→`SAVE TRANSACTION`；事务控制使用 SQL batch（避免 sp_executesql 的事务计数错误）。
+- 物理模型：一个 datasource 固定一个 database，`schemaName` 表示 SQL Server schema；
+  物理表由 DBA/init SQL 手工创建；DDL 自动化尚未启用。
+- 边界：**XA/MSDTC 未实现**（`transactionType=xa` 显式拒绝）；Windows/Kerberos/Entra 认证、
+  Always On 副本读路由未实现；SQL Server 前端 TDS 与 SQL Server 后端是不同方向。
 
 ## 5. 线程/任务栈说明
 

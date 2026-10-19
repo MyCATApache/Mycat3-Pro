@@ -123,6 +123,12 @@ fn validate_config(cfg: &MycatRouterConfig) -> anyhow::Result<()> {
         {
             mycat3_pgclient::parse_pg_jdbc_url(&ds.url, &ds.user, &ds.password)
                 .with_context(|| format!("datasource '{}' postgres url invalid", name))?;
+        } else if ds.db_type.eq_ignore_ascii_case("mssql")
+            || ds.db_type.eq_ignore_ascii_case("sqlserver")
+            || ds.db_type.eq_ignore_ascii_case("mssqlserver")
+        {
+            mycat3_mssql::parse_mssql_jdbc_url(&ds.url, &ds.user, &ds.password)
+                .with_context(|| format!("datasource '{}' SQL Server url invalid", name))?;
         } else {
             ds.parse_url()
                 .with_context(|| format!("datasource '{}' url invalid", name))?;

@@ -11,6 +11,7 @@ mycat3-config = { path = "../config" }
 mycat3-client = { path = "../client" }
 mycat3-oracle = { path = "../oracle" }
 mycat3-pgclient = { path = "../pgclient" }
+mycat3-mssql = { path = "../mssql" }
 tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true

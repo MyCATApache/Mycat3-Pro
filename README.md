@@ -4,7 +4,7 @@
 
 Mycat3 Pro 是对 [Mycat3](https://github.com/mycatparser/Mycat3)（Java 版分布式数据库中间件）的 Rust 语言重新实现。它保留了 Mycat3 的核心架构与配置格式（JSON 多文件配置可直接复用），以 tokio 异步运行时替代 Vert.x，以 sqlparser 替代 Druid/Calcite，提供 MySQL 协议代理、数据分片、读写分离、心跳高可用与可观测能力。
 
-- **342 个单元/集成测试全部通过**（协议编解码、17 种分片算法、SQL 路由、连接池、负载均衡、心跳切换、DDL 自动化、端到端全链路）
+- **357 个单元/集成测试全部通过**（协议编解码、17 种分片算法、SQL 路由、连接池、负载均衡、心跳切换、DDL 自动化、端到端全链路）
 - **DDL 配置自动化**：一条 `CREATE TABLE ... DBPARTITION BY hash(id) TBPARTITIONS 2 ...` 自动完成
   分片配置生成、物理建库建表、元数据热更新（与 Java 版 MycatRouterConfigOps 同语义）
 - **多协议同端口**（与 Java 版一致的字节级嗅探）：8066 端口同时服务 MySQL、PostgreSQL、SQL Server(TDS) 客户端；**真实客户端验证**：mysql CLI、psql 16（含扩展查询协议参数绑定）、sqlcmd/ODBC 同端口读写同一分片集群
@@ -38,6 +38,8 @@ CI（tag 触发）见 `.github/workflows/release.yml`。
 | SQL Server (TDS) 前端 | TDS 7.2–7.4：PreLogin/Login7、SQL Batch、**sp_executesql RPC**（Java 版解析损坏）、NULL 保真、ODBC/JDBC 实测兼容 | `protocol.tds`（Pro 修复增强） |
 | 原生 MySQL 后端 | 异步原生协议客户端（非 JDBC），支持 DEPRECATE_EOF、分包重组 | `datasource` / vert.x 原生客户端 |
 | Oracle 后端 | 官方 rust-oracledb thin 驱动（协议成本归零）+ MySQL→Oracle 方言翻译（标识符/LIMIT→ROWNUM/INSERT ALL/函数/日期格式），支持 MySQL+Oracle 混合分片 | JDBC+jOOQ parsingDataSource |
+| PostgreSQL 后端 | tokio-postgres + 自研池；schema 分片；PG XA 2PC；手工物理表 | JDBC+jOOQ |
+| SQL Server 后端 | tiberius TDS 客户端 + 自研池；T-SQL 方言（TOP/OFFSET FETCH/函数）；SQL 认证/TLS；本地事务；无 XA/MSDTC | JDBC+jOOQ |
 | 数据分片 | 17 种算法：Mod / Long / HashMod / MurmurHash 一致性环 / RangeMod / Pattern / PrefixPattern / FileMap / SubString / String / Date / Month / CRC32 预分槽(102400) / JumpConsistentHash / HotDate / AutoPartitionByLong / AutoFunction(hash/right_shift/yyyymm/mm/dd/...) | `router` |
 | 分片键裁剪 | `=`、`IN`、`BETWEEN`、`>`/`<` 范围；OR 自动退化为全表扫描 | `ValueIndexCondition` |
 | SQL 重写 | 逻辑表名 → 物理表名（AST 级重写，覆盖 FROM/JOIN/INSERT/UPDATE/DELETE/DDL） | `MysqlTableReplacer` |
@@ -95,14 +97,15 @@ server ──► sql ──► router ──► config
 ### 环境要求
 
 - Rust stable（Dockerfile 使用 `rust:1-bookworm`）
-- 一个或多个 MySQL 5.7 / 8.0 后端（`mysql_native_password`；caching_sha2 支持快速认证路径）
+- 一个或多个后端：MySQL 5.7/8.0、PostgreSQL、Oracle、SQL Server 2019/2022（按 `dbType` 配置）
+- MySQL 后端使用 `mysql_native_password` 或 caching_sha2 快速认证路径
 
 ### 构建
 
 ```bash
 cd "Mycat 3 Pro"
 cargo build --release          # 产物: target/release/mycat3-pro
-cargo test --workspace         # 342 个测试
+cargo test --workspace         # 357 个测试
 ```
 
 ### 启动（本机 MySQL 演示）
@@ -154,7 +157,8 @@ docker compose -f examples/docker/proxy.compose.yml up -d
 | [sharding-mysql](examples/docker/sharding-mysql/README.md) | 取模/枚举/月份/广播/单表 + MySQL XA |
 | [sharding-postgresql](examples/docker/sharding-postgresql/README.md) | PG schema 分片、引号/大小写、PG XA |
 | [sharding-oracle](examples/docker/sharding-oracle/README.md) | Oracle 双 schema、手工物理表、NLS、无 XA |
-| [tds-frontend](examples/docker/tds-frontend/README.md) | SQL Server 客户端（TDS）接入；SQL Server 不是后端 |
+| [sharding-sqlserver](examples/docker/sharding-sqlserver/README.md) | SQL Server 2022 后端、T-SQL 方言、SQL 认证/TLS、无 XA |
+| [tds-frontend](examples/docker/tds-frontend/README.md) | SQL Server 客户端（TDS）接入；与 SQL Server 后端方向不同 |
 | [performance](examples/docker/performance/README.md) | 线程/超时/连接池/缓存参数与容量区间 |
 
 容器细节（端口/卷/TLS/后端示例/健康检查/多架构/发布流程）见 [docs/docker.md](docs/docker.md)，
@@ -224,7 +228,7 @@ Pro 版聚焦**透传路由模式**（Java 版 `HackRouter` 快速路径的超�
 已实现，且与 Java 版存在差异的关键能力：
 - XA 分布式事务：**MySQL + PostgreSQL**（2PC、决策 WAL、启动 `XA RECOVER`/`pg_prepared_xacts` 恢复；Oracle thin 驱动无 XA 接口，显式拒绝）
 - Oracle 后端（`dbType: "oracle"`）：官方 rust-oracledb thin 驱动 + MySQL→Oracle 方言翻译（标识符/LIMIT→ROWNUM/INSERT ALL/函数/日期格式），支持 MySQL+Oracle 混合分片、三前端接入、事务语义对齐；Oracle 物理建表由 DBA 手工执行（DDL 自动化仅 MySQL）。详见 [oracle-backend-feasibility.md](docs/oracle-backend-feasibility.md) §8 与 [commands.md](docs/commands.md)
-- PostgreSQL 后端、纯代理模式（`server.mode=proxy`）、MySQL/PostgreSQL 前端 TLS
+- PostgreSQL / SQL Server 后端、纯代理模式（`server.mode=proxy`）、MySQL/PostgreSQL 前端 TLS
 
 详细清单与有意修复的 Java 版缺陷见 [docs/compatibility.md](docs/compatibility.md)。
 
@@ -233,7 +237,7 @@ Pro 版聚焦**透传路由模式**（Java 版 `HackRouter` 快速路径的超�
 ```bash
 cargo fmt --all          # 格式化
 cargo clippy --workspace # lint
-cargo test --workspace   # 测试（342 个）
+cargo test --workspace   # 测试（357 个）
 ```
 
 目录结构：
@@ -245,13 +249,16 @@ crates/
 ├── router/     # 分片算法（Java 逐位一致的哈希实现）与节点模型
 ├── sql/        # SQL 解析、元数据、路由分析、物理 SQL 重写
 ├── client/     # 原生异步 MySQL 后端客户端 + 连接池
+├── pgclient/   # PostgreSQL 后端（tokio-postgres）客户端/池
+├── oracle/     # Oracle 后端（rust-oracledb thin）客户端/池
+├── mssql/      # SQL Server 后端（tiberius）客户端/池 + 类型/错误映射
 ├── replica/    # 负载均衡策略、副本选择、心跳与主从切换
 └── server/     # 协议嗅探(sniff)、MySQL 前端(frontend)、PostgreSQL 前端(pg)、
                 # SQL Server 前端(tds)、协议无关执行层(engine)、执行引擎(executor)、
                 # 本地命令(commands)、事务(tx)、监控(monitor)、CLI (mycat3-pro)
 conf/           # 默认配置（2 数据源 + 分片/广播/单表演示）
 docker/         # compose 演示环境初始化 SQL 与容器配置
-examples/       # Docker Compose 示例库（代理模式、分片、PG/Oracle/TDS、性能）
+examples/       # Docker Compose 示例库（代理、MySQL/PG/Oracle/SQLServer 分片、性能）
 scripts/        # 启动/停止、Docker Hub 发布脚本
 docs/           # 文档
 tests/          # （预留）跨 crate 测试

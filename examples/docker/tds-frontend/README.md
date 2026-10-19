@@ -1,21 +1,20 @@
 # SQL Server 客户端接入（TDS 前端）+ MySQL 后端
 
-## 先说明能力边界：TDS 是前端，不是后端
+## 先说明方向：TDS 是前端，SQL Server 也可以做后端
 
-Mycat3 Pro v0.3.0 的后端驱动只有三种：
+Mycat3 Pro 支持三种客户端协议（MySQL/PG/TDS）和四种后端：
 
 | 角色 | 支持情况 | 配置字段 |
 |---|---|---|
 | MySQL 后端 | ✅ 原生协议 | `dbType: "mysql"` |
 | PostgreSQL 后端 | ✅ tokio-postgres | `dbType: "postgresql"` |
 | Oracle 后端 | ✅ rust-oracledb thin | `dbType: "oracle"` |
-| **SQL Server 后端** | ❌ **未实现** | 没有 `dbType: "mssql"` |
+| **SQL Server 后端** | ✅ tiberius TDS 客户端 | `dbType: "mssql"` / `"sqlserver"` |
 | SQL Server 客户端（TDS 协议） | ✅ 前端支持 | 同端口 8066 协议嗅探 |
 
 因此本目录演示的是 **SQL Server 客户端（sqlcmd / TDS）→ Mycat3 Pro → MySQL 后端**，
-不是“SQL Server 作为后端”。SQL Server 后端需要新增 TDS 客户端驱动 + T-SQL→MySQL/PG
-方言层，属于新的后端项目，不在当前版本范围内；本示例不会伪装成已支持。
-代价与实施方案见 [SQL Server 后端接入评估](../../../docs/sqlserver-backend-feasibility.md)。
+不是“SQL Server 作为数据源”。SQL Server 作为**后端**见
+[`sharding-sqlserver`](../sharding-sqlserver/README.md)（`dbType: "mssql"`，tiberius 驱动）。
 
 TDS 前端与 MySQL/PG 前端共享同一执行引擎，所以分片、广播、归并、管理命令、
 XA（后端支持时）完全一致，区别只在协议编解码和少量 T-SQL 改写。
@@ -144,18 +143,25 @@ TDS 登录使用 Mycat 用户（本例 `root/123456`），不是 MySQL 后端账
 TDS 结果统一为文本/NVARCHAR，NULL 保真；日期/数值的显示格式按 MySQL 后端字符串化，
 与 MySQL 客户端可能略有差异（例如时间精度），这是协议层差异，不是数据错误。
 
-## 为什么没有“SQL Server 后端”示例
+## SQL Server 后端
 
-实现 SQL Server 后端至少需要：
+SQL Server 也可以作为 Mycat 的**后端**（不是本目录的 TDS 前端方向）：
 
-1. TDS 客户端协议（登录、RPC、事务、类型系统、TDS 版本协商）；
-2. T-SQL 方言到 MySQL/PG 的翻译（`TOP`、`OFFSET/FETCH`、`GETDATE()`、
-   `IDENTITY`、`NVARCHAR`、`MERGE` 等）；
-3. 连接池、心跳、XA（SQL Server 的 MSDTC 与 MySQL XA 不同）与错误映射。
+```json
+{
+  "name": "ds0",
+  "url": "jdbc:sqlserver://sqlserver:1433;databaseName=db1;encrypt=true;trustServerCertificate=true",
+  "user": "sa",
+  "password": "...",
+  "dbType": "mssql"
+}
+```
 
-这三项都是新的后端工程，不是换一个 `dbType` 字符串。当前版本明确不支持；
-如果业务必须把 SQL Server 作为数据源，应继续用 SQL Server 原生链路，
-或先通过 ETL/CDC 同步到 MySQL/PG 后再由 Mycat 分片。
+- 基于 `tiberius` TDS 客户端 + 自研连接池；
+- 支持 SQL 认证、TLS、schema 分片、常用 T-SQL 方言、本地事务；
+- 物理表手工创建；XA/MSDTC 未实现，`transactionType=xa` 显式拒绝；
+- 完整示例：[`sharding-sqlserver`](../sharding-sqlserver/README.md)；
+- 代价与限制：[SQL Server 后端接入评估](../../../docs/sqlserver-backend-feasibility.md)。
 
 ## 排障
 

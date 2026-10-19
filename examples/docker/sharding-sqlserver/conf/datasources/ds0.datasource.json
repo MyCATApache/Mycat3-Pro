@@ -1,0 +1,15 @@
+{
+  "name": "ds0",
+  "url": "jdbc:sqlserver://sqlserver:1433;databaseName=db1;encrypt=true;trustServerCertificate=true",
+  "user": "sa",
+  "password": "SqlServer_Demo1!",
+  "dbType": "mssql",
+  "weight": 1,
+  "maxCon": 8,
+  "minCon": 1,
+  "maxConnectTimeout": 5000,
+  "initSqls": [],
+  "instanceType": "READ_WRITE",
+  "idleTimeout": 60000,
+  "type": "NATIVE"
+}

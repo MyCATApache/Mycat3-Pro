@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mycat3_client::{CheckedOutConnection, ClientError, QueryOutcome, ResultSet};
+use mycat3_mssql::{CheckedOutMssqlConn, MssqlError, MssqlOutcome, MssqlPool};
 use mycat3_oracle::{config_from_jdbc_url, OraclePool, PooledOracleConn};
 use mycat3_pgclient::{CheckedOutPgConn, PgError};
 use mycat3_protocol::packets::{build_text_row, ColumnDef};
@@ -66,6 +67,7 @@ pub enum BackendPool {
     MySql(Arc<mycat3_client::DataSourcePool>),
     Oracle(Arc<OraclePool>),
     Pg(Arc<mycat3_pgclient::PgDataSourcePool>),
+    Mssql(Arc<MssqlPool>),
 }
 
 impl BackendPool {
@@ -100,6 +102,43 @@ impl BackendPool {
                 }
             };
             Ok(BackendPool::Oracle(pool))
+        } else if cfg.db_type.eq_ignore_ascii_case("mssql")
+            || cfg.db_type.eq_ignore_ascii_case("sqlserver")
+            || cfg.db_type.eq_ignore_ascii_case("mssqlserver")
+        {
+            let pool = {
+                let existing = state.mssql_pools.read().get(datasource).cloned();
+                match existing {
+                    Some(p) => p,
+                    None => {
+                        let mut ep =
+                            mycat3_mssql::parse_mssql_jdbc_url(&cfg.url, &cfg.user, &cfg.password)
+                                .map_err(|e| {
+                                    BackendError::Conn(format!("datasource {}: {}", datasource, e))
+                                })?;
+                        ep.connect_timeout =
+                            Duration::from_millis(cfg.max_connect_timeout.max(1000));
+                        let p = MssqlPool::new(
+                            datasource,
+                            ep,
+                            cfg.max_con as usize,
+                            cfg.min_con as usize,
+                            Duration::from_millis(cfg.idle_timeout.max(1000)),
+                            cfg.init_sqls.clone(),
+                        );
+                        state
+                            .mssql_pools
+                            .write()
+                            .insert(datasource.to_string(), p.clone());
+                        if let Ok(h) = tokio::runtime::Handle::try_current() {
+                            let warm = p.clone();
+                            h.spawn(async move { warm.prewarm().await });
+                        }
+                        p
+                    }
+                }
+            };
+            Ok(BackendPool::Mssql(pool))
         } else if cfg.db_type.eq_ignore_ascii_case("postgresql")
             || cfg.db_type.eq_ignore_ascii_case("postgres")
             || cfg.db_type.eq_ignore_ascii_case("pgsql")
@@ -166,6 +205,16 @@ impl BackendPool {
                     in_tx: false,
                 })
             }
+            BackendPool::Mssql(p) => {
+                let conn = p
+                    .acquire()
+                    .await
+                    .map_err(|e| BackendError::Conn(e.to_string()))?;
+                Ok(BackendSession {
+                    kind: BackendKind::Mssql(conn),
+                    in_tx: false,
+                })
+            }
         }
     }
 }
@@ -180,6 +229,7 @@ enum BackendKind {
     MySql(CheckedOutConnection),
     Oracle(PooledOracleConn),
     Pg(CheckedOutPgConn),
+    Mssql(CheckedOutMssqlConn),
 }
 
 /// 统一的执行结果。
@@ -205,6 +255,7 @@ impl BackendSession {
             BackendKind::MySql(c) => c.mark_broken(),
             BackendKind::Oracle(c) => c.mark_broken(),
             BackendKind::Pg(c) => c.mark_broken(),
+            BackendKind::Mssql(c) => c.mark_broken(),
         }
     }
 
@@ -294,6 +345,28 @@ impl BackendSession {
                     }
                 }
             }
+            BackendKind::Mssql(conn) => match conn.conn().query(sql, timeout).await {
+                Ok(MssqlOutcome::Ok {
+                    affected_rows,
+                    last_insert_id,
+                }) => Ok(BackendOutcome::Ok {
+                    affected_rows,
+                    last_insert_id,
+                }),
+                Ok(MssqlOutcome::Rows { columns, rows }) => Ok(text_rows_to_backend(
+                    columns
+                        .iter()
+                        .map(|c| (c.name.as_str(), c.mysql_type))
+                        .collect(),
+                    rows,
+                )),
+                Err(e) => {
+                    if e.is_conn_level() {
+                        conn.mark_broken();
+                    }
+                    Err(mssql_err(e))
+                }
+            },
         }
     }
 
@@ -308,6 +381,9 @@ impl BackendSession {
                 .map_err(BackendError::from),
             BackendKind::Oracle(_) => Err(BackendError::Conn(
                 "XA 事务不支持 Oracle 后端（rust-oracledb thin 驱动无 XA 接口）".into(),
+            )),
+            BackendKind::Mssql(_) => Err(BackendError::Conn(
+                "XA 事务不支持 SQL Server 后端（无 XA；MSDTC 未实现）".into(),
             )),
             BackendKind::Pg(conn) => conn.conn().query(sql).await.map(|_| ()).map_err(pg_err),
         }
@@ -324,6 +400,11 @@ impl BackendSession {
                 .map_err(BackendError::from),
             BackendKind::Oracle(_) => Ok(()),
             BackendKind::Pg(conn) => conn.conn().query(sql).await.map(|_| ()).map_err(pg_err),
+            BackendKind::Mssql(conn) => conn
+                .conn()
+                .set_forward(sql, Some(Duration::from_secs(30)))
+                .await
+                .map_err(mssql_err),
         }
     }
 
@@ -381,6 +462,30 @@ impl BackendSession {
                 conn.exec_sql_blocking(sql).await.map_err(oracle_err)
             }
             BackendKind::Pg(conn) => conn.conn().query(sql).await.map(|_| ()).map_err(pg_err),
+            BackendKind::Mssql(conn) => {
+                conn.conn()
+                    .tx_command(sql, Some(Duration::from_secs(30)))
+                    .await
+                    .map_err(mssql_err)?;
+                let upper = sql.trim_start().to_ascii_uppercase();
+                let compact = upper.split_whitespace().collect::<Vec<_>>();
+                if let Some(first) = compact.first() {
+                    let first = first.trim_end_matches(';');
+                    if first == "BEGIN" || first == "START" {
+                        self.in_tx = true;
+                    } else if first == "COMMIT" {
+                        self.in_tx = false;
+                    } else if first == "ROLLBACK"
+                        && !compact.iter().any(|x| {
+                            x.eq_ignore_ascii_case("SAVEPOINT")
+                                || x.eq_ignore_ascii_case("TRANSACTION")
+                        })
+                    {
+                        self.in_tx = false;
+                    }
+                }
+                Ok(())
+            }
         }
     }
 
@@ -398,6 +503,9 @@ impl BackendSession {
             BackendKind::Pg(conn) => conn.conn().query("BEGIN").await.map(|_| ()).map_err(pg_err),
             BackendKind::Oracle(_) => Err(BackendError::Conn(
                 "XA 事务不支持 Oracle 后端（rust-oracledb thin 驱动无 XA 接口）".into(),
+            )),
+            BackendKind::Mssql(_) => Err(BackendError::Conn(
+                "XA 事务不支持 SQL Server 后端（无 XA；MSDTC 未实现）".into(),
             )),
         }
     }
@@ -428,6 +536,9 @@ impl BackendSession {
                 .map(|_| ())
                 .map_err(pg_err),
             BackendKind::Oracle(_) => Err(BackendError::Conn("XA 不支持 Oracle 后端".into())),
+            BackendKind::Mssql(_) => Err(BackendError::Conn(
+                "XA 不支持 SQL Server 后端（无 XA；MSDTC 未实现）".into(),
+            )),
         }
     }
 
@@ -460,6 +571,9 @@ impl BackendSession {
                 conn.conn().query(&sql).await.map(|_| ()).map_err(pg_err)
             }
             BackendKind::Oracle(_) => Err(BackendError::Conn("XA 不支持 Oracle 后端".into())),
+            BackendKind::Mssql(_) => Err(BackendError::Conn(
+                "XA 不支持 SQL Server 后端（无 XA；MSDTC 未实现）".into(),
+            )),
         }
     }
 
@@ -495,6 +609,23 @@ impl BackendSession {
                 Ok(())
             }
             BackendKind::Oracle(_) => Err(BackendError::Conn("XA 不支持 Oracle 后端".into())),
+            BackendKind::Mssql(_) => Err(BackendError::Conn(
+                "XA 不支持 SQL Server 后端（无 XA；MSDTC 未实现）".into(),
+            )),
+        }
+    }
+}
+
+/// SQL Server 错误 → BackendError：SQL 级 → Server（可复用）；连接级 → Conn。
+fn mssql_err(e: MssqlError) -> BackendError {
+    if e.is_conn_level() {
+        BackendError::Conn(e.to_string())
+    } else {
+        let (errno, sqlstate, message) = e.to_mysql_parts();
+        BackendError::Server {
+            errno,
+            sqlstate,
+            message,
         }
     }
 }
@@ -630,6 +761,12 @@ pub fn translate_for_backend(
     if db_type.eq_ignore_ascii_case("oracle") {
         mycat3_sql::translate_oracle_sql(sql)
             .map_err(|e| BackendError::Conn(format!("SQL 翻译为 Oracle 方言失败: {}", e)))
+    } else if db_type.eq_ignore_ascii_case("mssql")
+        || db_type.eq_ignore_ascii_case("sqlserver")
+        || db_type.eq_ignore_ascii_case("mssqlserver")
+    {
+        mycat3_sql::translate_mssql_sql(sql)
+            .map_err(|e| BackendError::Conn(format!("SQL 翻译为 SQL Server 方言失败: {}", e)))
     } else if db_type.eq_ignore_ascii_case("postgresql")
         || db_type.eq_ignore_ascii_case("postgres")
         || db_type.eq_ignore_ascii_case("pgsql")
@@ -685,6 +822,21 @@ mod tests {
         assert!(out.contains("ROWNUM"), "{}", out);
         // 不支持结构 → 明确报错
         assert!(translate_for_backend(&st, "o", "DELETE FROM t LIMIT 1").is_err());
+    }
+
+    #[test]
+    fn test_translate_mssql() {
+        let st = state_with(ds(
+            "s",
+            "mssql",
+            "jdbc:sqlserver://127.0.0.1:1433;databaseName=db1;encrypt=true;trustServerCertificate=true",
+        ));
+        let out = translate_for_backend(&st, "s", "SELECT * FROM t LIMIT 10").unwrap();
+        assert!(out.contains("TOP"), "{}", out);
+        let out = translate_for_backend(&st, "s", "SELECT * FROM t ORDER BY id LIMIT 10 OFFSET 5")
+            .unwrap();
+        assert!(out.contains("OFFSET 5 ROWS"), "{}", out);
+        assert!(out.contains("FETCH NEXT 10 ROWS ONLY"), "{}", out);
     }
 
     #[test]

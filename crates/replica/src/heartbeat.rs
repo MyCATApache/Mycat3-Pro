@@ -299,6 +299,32 @@ impl HeartbeatDetector {
                 HeartbeatOutcome::Failed("oracle ping failed".into())
             };
         }
+        // SQL Server 数据源：单机探活语义（select 1），无 AG 复制探测
+        if cfg.db_type.eq_ignore_ascii_case("mssql")
+            || cfg.db_type.eq_ignore_ascii_case("sqlserver")
+            || cfg.db_type.eq_ignore_ascii_case("mssqlserver")
+        {
+            let timeout = Duration::from_millis(cfg.max_connect_timeout.clamp(1000, 30_000));
+            let ep = match mycat3_mssql::parse_mssql_jdbc_url(&cfg.url, &cfg.user, &cfg.password) {
+                Ok(mut e) => {
+                    e.connect_timeout = timeout;
+                    e
+                }
+                Err(e) => return HeartbeatOutcome::Failed(e.to_string()),
+            };
+            return match tokio::time::timeout(timeout, mycat3_mssql::MssqlConnection::connect(&ep))
+                .await
+            {
+                Ok(Ok(mut conn)) => {
+                    if conn.ping().await {
+                        HeartbeatOutcome::Healthy
+                    } else {
+                        HeartbeatOutcome::Failed("sqlserver ping failed".into())
+                    }
+                }
+                _ => HeartbeatOutcome::Failed("sqlserver connect failed".into()),
+            };
+        }
         // PostgreSQL 数据源：单机探活语义（select 1），无主从复制探测
         if cfg.db_type.eq_ignore_ascii_case("postgresql")
             || cfg.db_type.eq_ignore_ascii_case("postgres")

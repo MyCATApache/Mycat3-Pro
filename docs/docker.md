@@ -60,12 +60,13 @@ docker run --rm -v "$PWD/conf:/opt/mycat3-pro/conf:ro" mycat/mycat3-pro:latest c
 | [`sharding-mysql`](../examples/docker/sharding-mysql/README.md) | 取模/枚举/月份/广播/单表 + MySQL XA 2PC |
 | [`sharding-postgresql`](../examples/docker/sharding-postgresql/README.md) | PG schema 分片、大小写/引号、手工 DDL、PG XA |
 | [`sharding-oracle`](../examples/docker/sharding-oracle/README.md) | Oracle 双 schema、大写标识符、NLS、无 XA |
-| [`tds-frontend`](../examples/docker/tds-frontend/README.md) | SQL Server 客户端（TDS）接入；**SQL Server 不是后端** |
+| [`sharding-sqlserver`](../examples/docker/sharding-sqlserver/README.md) | SQL Server 2022 后端、T-SQL 方言、SQL 认证/TLS、无 XA |
+| [`tds-frontend`](../examples/docker/tds-frontend/README.md) | SQL Server 客户端（TDS）接入；与 SQL Server 后端方向不同 |
 | [`performance`](../examples/docker/performance/README.md) | 线程/超时/连接池/缓存参数实验 |
 | [`README`](../examples/docker/README.md) | 端口、凭据、运行方式与 SQL Server 后端边界 |
 
-全部示例默认使用 `mycat/mycat3-pro:latest`；SQL Server 只作为**前端 TDS 协议**支持，
-后端目前只有 MySQL / PostgreSQL / Oracle。
+全部示例默认使用 `mycat/mycat3-pro:latest`。SQL Server 既可作为**前端 TDS 协议**接入，
+也已作为**后端**（`dbType: "mssql"`）实现；TDS 前端示例与 SQL Server 后端示例是不同方向。
 
 ## 纯代理模式（proxy-only）
 
@@ -174,6 +175,29 @@ mysql -h127.0.0.1 -P18066 -uroot -p123456 -Ddemo -e "drop table t_proxy"   # 被
 ```
 
 Oracle 物理表需由 DBA 手工创建；Oracle 后端不支持 XA（thin 驱动无接口）。
+
+### SQL Server（后端）
+
+```json
+{
+  "name": "ds3",
+  "url": "jdbc:sqlserver://sqlserver:1433;databaseName=db1;encrypt=true;trustServerCertificate=true",
+  "user": "sa",
+  "password": "change_me",
+  "dbType": "mssql",
+  "maxCon": 20,
+  "minCon": 1,
+  "instanceType": "READ_WRITE",
+  "type": "NATIVE"
+}
+```
+
+- `schemaName` 表示 SQL Server schema（一个 datasource 固定一个 database）；
+- 物理表由 DBA/init SQL 手工创建；
+- 支持 SQL 认证、TLS、`TOP`/`OFFSET FETCH`、本地事务；
+- **无 XA/MSDTC**；`transactionType=xa` 显式拒绝；
+- Windows 集成认证/Always On 副本读路由未实现；
+- 完整示例：[`examples/docker/sharding-sqlserver`](../examples/docker/sharding-sqlserver/README.md)。
 
 ## 前端 TLS
 

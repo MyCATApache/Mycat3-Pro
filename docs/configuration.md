@@ -101,7 +101,7 @@ Mycat3 Pro 使用与 Mycat3（Java）完全兼容的 JSON 多文件配置。配�
 - `weight`：BalanceRoundRobin 权重
 - `maxCon`：连接池上限（信号量）
 - `initSqls`：新建连接后执行的初始化 SQL
-- `dbType`：`mysql`（默认）、`postgresql` 或 `oracle`；决定后端驱动与 SQL 方言翻译
+- `dbType`：`mysql`（默认）、`postgresql`、`oracle` 或 `mssql`/`sqlserver`；决定后端驱动与 SQL 方言翻译
 - `server.sslCert`/`server.sslKey`（可选）：前端 TLS 证书/私钥 PEM 路径（相对 home），
   同时配置启用 MySQL/PG 前端 TLS（TDS 未实现）
 - 用户 `readOnly`/`loginLimit`：只读强制 / 活跃连接上限（见 commands.md）
@@ -110,7 +110,7 @@ Mycat3 Pro 使用与 Mycat3（Java）完全兼容的 JSON 多文件配置。配�
   `stickySession`/`sendBufferSize`/`asyncDDL` 等约 20 项）**忽略且无效果**（文档化边界）
 - 用户 `transactionType`：`proxy`（默认，本地代理事务）或 `xa`（**MySQL/PostgreSQL XA 2PC**，
   含决策 WAL `<home>/xa/xa-wal.log`、启动 `XA RECOVER`/`pg_prepared_xacts` 崩溃恢复；
-  Oracle 后端分支显式拒绝）
+  Oracle/SQL Server 后端分支显式拒绝）
 - `instanceType`：`READ` / `WRITE` / `READ_WRITE`
 - `idleTimeout`：空闲连接回收阈值（毫秒）
 
@@ -230,6 +230,21 @@ AutoFunction 示例（`dbpartition by hash(id) tbpartition by hash(id) tbpartiti
 ```json
 "user_info": { "locality": { "targetName": "ds0", "schemaName": "db1_0", "tableName": "user_info" } }
 ```
+
+## SQL Server 后端说明（dbType=mssql / sqlserver）
+
+- 使用 `tiberius` TDS 客户端（SQL 认证；TLS 可配 `encrypt=true` /
+  `trustServerCertificate=true`）；不支持 Windows/Kerberos/Entra 集成认证；
+- URL：`jdbc:sqlserver://host:1433;databaseName=db1;encrypt=true;trustServerCertificate=true`；
+  一个数据源固定一个 database，`schemaName` 表示 SQL Server schema；
+- 物理表由 DBA/init SQL 手工创建（DDL 自动化暂未启用，与 PG/Oracle 一致）；
+- 方言：`[bracket]` 标识符、`LIMIT`→`TOP`/`OFFSET … FETCH NEXT`、
+  常用函数/布尔映射；upsert/REPLACE/`DELETE LIMIT`/`FOR UPDATE` 等显式报错；
+- 事务：`SET autocommit=0`→`BEGIN TRAN`、autocommit=1→`COMMIT`；
+  `SAVEPOINT x`→`SAVE TRANSACTION [x]`；跨分片仍非原子；
+- **XA 不支持**（SQL Server 无 XA；MSDTC 未实现），`transactionType=xa` 分支显式拒绝；
+- `last_insert_id` 通过 `SCOPE_IDENTITY()` 尽力返回，非自增表为 0；
+- Always On listener 可作为一个 datasource 使用，但一期不做 AG 副本读路由/延迟感知。
 
 ## PostgreSQL 后端说明（dbType=postgresql）
 

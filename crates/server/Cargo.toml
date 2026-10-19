@@ -15,6 +15,7 @@ mycat3-client = { path = "../client" }
 mycat3-replica = { path = "../replica" }
 mycat3-oracle = { path = "../oracle" }
 mycat3-pgclient = { path = "../pgclient" }
+mycat3-mssql = { path = "../mssql" }
 sqlparser.workspace = true
 tokio.workspace = true
 tracing.workspace = true

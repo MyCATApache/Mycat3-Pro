@@ -1,15 +1,26 @@
 # SQL Server 后端接入评估（TDS 客户端 + T-SQL 方言层）
 
+> **实施状态（2026-10）**：已按本文方案落地 `crates/mssql`（`tiberius` 0.13 +
+> 自研连接池）、`BackendPool::Mssql`、T-SQL 方言层和 `sharding-sqlserver` Compose 示例。
+> 已支持 SQL 认证/TLS、schema 分片、广播/单表、常用类型、`TOP`/`OFFSET FETCH`、本地事务/
+> `SET autocommit`/保存点；**XA/MSDTC、Windows 认证、Always On 读路由、DDL 自动化仍未实现**。
+> 下文保留评估时的判断与估算，作为后续扩展依据。
+>
+> 已用 SQL Server 2022 容器验证：分片/广播/单表、MySQL/PostgreSQL/TDS 三种前端、
+> DECIMAL/DATETIME2/NVARCHAR 类型、重复键 1062 映射、事务/autocommit/保存点、XA 显式拒绝。
+>
 > 结论先行：**可行，但不是“加一个 dbType 字符串”就能完成**。
 > 建议用成熟 TDS 客户端（首选 `tiberius`，PoC 验证 tokio/TLS/类型覆盖）实现
 > “SQL Server 分片后端”的 MVP；XA、DDL 自动化、Always On 读副本路由应分阶段，
 > 其中 **XA/MSDTC 不建议作为一期目标**。
 
-当前版本（0.3.0）的能力边界：
+评估时（v0.3.0）的能力边界：
 
 - 后端：MySQL、PostgreSQL、Oracle；
 - SQL Server：仅**前端 TDS 协议**（`tds-frontend` 示例），没有 `dbType=mssql`；
 - 因此“SQL Server 分片后端”是新增后端工程，不是配置开关。
+
+当前源码已按第 12 节顺序完成 MVP 后端；限制见顶部“实施状态”。
 
 ---
 

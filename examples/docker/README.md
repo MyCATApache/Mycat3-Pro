@@ -18,17 +18,21 @@ docker build -t mycat/mycat3-pro:latest .
 | [`sharding-mysql`](sharding-mysql/README.md) | `local` | MySQL × 2 | MySQL / PG / TDS | 取模/枚举/月份/广播/单表、XA 2PC |
 | [`sharding-postgresql`](sharding-postgresql/README.md) | `local` | PostgreSQL × 2 | PostgreSQL / MySQL / TDS | PG schema 分片、大小写、手工 DDL、PG XA |
 | [`sharding-oracle`](sharding-oracle/README.md) | `local` | Oracle Free（双 schema） | MySQL / PG / TDS | 大写标识符/引号列、NLS 日期、无 XA、手工物理表 |
+| [`sharding-sqlserver`](sharding-sqlserver/README.md) | `local` | SQL Server 2022 | MySQL / PG / TDS | T-SQL 方言、SQL 认证/TLS、手工 DDL、无 XA |
 | [`tds-frontend`](tds-frontend/README.md) | `local` | MySQL | **SQL Server (TDS)** / MySQL | sqlcmd/T-SQL 接入、`TOP n` 改写、协议无关性 |
 | [`performance`](performance/README.md) | `local` | MySQL（双 schema） | MySQL | 线程/超时/连接池/缓存参数与轻量对比 |
 | [`proxy.compose.yml`](proxy.compose.yml) | `proxy` | MySQL | MySQL | 最小 5 分钟代理示例（早期版本） |
 
-### SQL Server 后端？没有这个示例
+### SQL Server：前端与后端是两件事
 
-v0.3.0 的后端只有 **MySQL / PostgreSQL / Oracle**。SQL Server 是**前端 TDS 协议**，
-不是后端 `dbType`；[`tds-frontend`](tds-frontend/README.md) 演示的是
-“SQL Server 客户端 → Mycat → MySQL”，不是“SQL Server 作为数据源”。
-SQL Server 后端需要新增 TDS 客户端驱动和 T-SQL 方言层，当前版本明确不支持；
-代价与实施方案见 [docs/sqlserver-backend-feasibility.md](../../docs/sqlserver-backend-feasibility.md)。
+- **前端 TDS**：[`tds-frontend`](tds-frontend/README.md) 演示
+  “SQL Server 客户端（sqlcmd）→ Mycat → MySQL”；
+- **后端 SQL Server**：[`sharding-sqlserver`](sharding-sqlserver/README.md) 演示
+  Mycat 用 `dbType: "mssql"` 连接 SQL Server 2022 并做分片/广播/归并。
+
+后端基于 `tiberius` TDS 客户端 + 自研连接池，支持 SQL 认证、TLS、schema 分片、
+本地事务和常用 T-SQL；**XA/MSDTC 未实现**，跨分片写不承诺原子性。
+评估与限制见 [docs/sqlserver-backend-feasibility.md](../../docs/sqlserver-backend-feasibility.md)。
 
 ## 通用约定
 
@@ -44,6 +48,7 @@ SQL Server 后端需要新增 TDS 客户端驱动和 T-SQL 方言层，当前版
 | sharding-mysql | 28066 | 29066 | MySQL 13317/13318 |
 | sharding-postgresql | 38066 | 39066 | PG 15434/15435 |
 | sharding-oracle | 48066 | 49066 | Oracle 11521 |
+| sharding-sqlserver | 38068 | 39068 | SQL Server 13321 |
 | tds-frontend | 58066 | 59066 | MySQL 13319 |
 | performance | 28067 | 29067 | MySQL 13320 |
 
@@ -62,6 +67,7 @@ docker compose down -v
 - `sharding-mysql`：`./demo.sh` 演示五种落点与 XA；
 - `sharding-postgresql`：`./demo.sh` 用 psql 走 PG 前端；
 - `sharding-oracle`：`./demo.sh` 首次启动较慢；
+- `sharding-sqlserver`：`./demo.sh` 需要 SQL Server 2022 镜像/约 2GB 内存；
 - `tds-frontend`：`./demo.sh` 通过 sqlcmd 写入/查询；
 - `performance`：`./bench.sh` 做轻量前后对比（不是严谨压测）。
 

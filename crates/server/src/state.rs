@@ -329,6 +329,8 @@ pub struct ServerState {
     pub oracle_pools: RwLock<HashMap<String, Arc<mycat3_oracle::OraclePool>>>,
     /// PostgreSQL 数据源连接池（dbType=postgresql）
     pub pg_pools: RwLock<HashMap<String, Arc<mycat3_pgclient::PgDataSourcePool>>>,
+    /// SQL Server 数据源连接池（dbType=mssql/sqlserver）
+    pub mssql_pools: RwLock<HashMap<String, Arc<mycat3_mssql::MssqlPool>>>,
     /// SQL 结果缓存（createSqlCache/showSqlCaches/dropSqlCache）
     pub sql_cache: Arc<crate::sqlcache::SqlCacheManager>,
     /// XA 协调者决策日志（MySQL-only 2PC 崩溃恢复）
@@ -385,6 +387,7 @@ impl ServerState {
             processes: Arc::new(ProcessRegistry::default()),
             oracle_pools: RwLock::new(HashMap::new()),
             pg_pools: RwLock::new(HashMap::new()),
+            mssql_pools: RwLock::new(HashMap::new()),
             xa_log: Arc::new(crate::xa::XaLog::new(
                 home.as_ref().map(|h| h.join("xa").join("xa-wal.log")),
             )),

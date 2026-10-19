@@ -1,0 +1,17 @@
+[package]
+name = "mycat3-mssql"
+description = "SQL Server (TDS) backend client for Mycat3 Pro, based on tiberius"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+mycat3-protocol = { path = "../protocol" }
+tiberius = { version = "0.13", default-features = false, features = ["tds80", "rustls"] }
+tokio.workspace = true
+tokio-util = { workspace = true, features = ["compat"] }
+chrono.workspace = true
+parking_lot.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

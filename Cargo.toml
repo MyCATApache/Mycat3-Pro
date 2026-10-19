@@ -10,6 +10,7 @@ members = [
     "crates/replica",
     "crates/server",
     "crates/oracle",
+    "crates/mssql",
 ]
 
 [workspace.package]
@@ -28,9 +29,11 @@ mycat3-sql = { path = "crates/sql" }
 mycat3-client = { path = "crates/client" }
 mycat3-replica = { path = "crates/replica" }
 mycat3-oracle = { path = "crates/oracle" }
+mycat3-mssql = { path = "crates/mssql" }
 
 # async runtime
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", default-features = false }
 
 # serialization / config
 serde = { version = "1", features = ["derive"] }

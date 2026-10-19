@@ -166,7 +166,7 @@ Oracle 受 `processes/sessions` 限制，`maxCon` 要按实例参数留足。
 | MySQL | 原生协议、原始载荷快路径；XA 原生 | `max_connections`、锁等待、网络 RTT 是主因 |
 | PostgreSQL | 异步 tokio-postgres，prepare 描述缓存；结果需类型映射 | 连接成本较高；默认 100 连接；XA 需 prepared 槽位 |
 | Oracle | rust-oracledb thin，阻塞调用放入 blocking 池；结果字符串化 | 单连接较重；`maxCon` 宜小；无 XA；日期/数值字符串化有额外 CPU |
-| SQL Server | **仅前端 TDS**，不是后端 | 不能用 `dbType=mssql`；详见 tds-frontend 示例 |
+| SQL Server | tiberius TDS 客户端/自研池；结果字符串化 | 连接较重；`maxCon` 宜小；无 XA/MSDTC；参见 sharding-sqlserver |
 
 PG/Oracle 的结果要经过“数据库类型 → 字符串行 → MySQL 文本载荷”的转换，
 比 MySQL 原始载荷透传多一层 CPU；大结果集/跨分片归并时更明显。

@@ -1,0 +1,70 @@
+IF DB_ID(N'db1') IS NULL
+    CREATE DATABASE db1;
+GO
+USE db1;
+GO
+
+IF SCHEMA_ID(N'db1_0') IS NULL
+    EXEC(N'CREATE SCHEMA db1_0');
+GO
+IF SCHEMA_ID(N'db1_1') IS NULL
+    EXEC(N'CREATE SCHEMA db1_1');
+GO
+
+CREATE TABLE db1_0.orders_0 (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    amount DECIMAL(12,2) NOT NULL,
+    status NVARCHAR(16) NOT NULL,
+    created DATETIME2 NOT NULL
+);
+CREATE TABLE db1_0.orders_1 (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    amount DECIMAL(12,2) NOT NULL,
+    status NVARCHAR(16) NOT NULL,
+    created DATETIME2 NOT NULL
+);
+CREATE TABLE db1_1.orders_2 (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    amount DECIMAL(12,2) NOT NULL,
+    status NVARCHAR(16) NOT NULL,
+    created DATETIME2 NOT NULL
+);
+CREATE TABLE db1_1.orders_3 (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    amount DECIMAL(12,2) NOT NULL,
+    status NVARCHAR(16) NOT NULL,
+    created DATETIME2 NOT NULL
+);
+
+CREATE TABLE db1_0.tenant_order_0 (
+    id BIGINT PRIMARY KEY,
+    tenant_id NVARCHAR(32) NOT NULL,
+    note NVARCHAR(128) NOT NULL,
+    created DATETIME2 NOT NULL
+);
+CREATE TABLE db1_1.tenant_order_1 (
+    id BIGINT PRIMARY KEY,
+    tenant_id NVARCHAR(32) NOT NULL,
+    note NVARCHAR(128) NOT NULL,
+    created DATETIME2 NOT NULL
+);
+
+CREATE TABLE db1_0.dict (
+    id BIGINT PRIMARY KEY,
+    name NVARCHAR(64) NOT NULL
+);
+CREATE TABLE db1_1.dict (
+    id BIGINT PRIMARY KEY,
+    name NVARCHAR(64) NOT NULL
+);
+
+CREATE TABLE db1_0.user_info (
+    id BIGINT PRIMARY KEY,
+    name NVARCHAR(64) NOT NULL,
+    profile NVARCHAR(255) NOT NULL
+);
+GO

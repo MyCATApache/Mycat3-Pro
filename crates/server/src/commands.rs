@@ -358,6 +358,16 @@ fn handle_admin_show(state: &Arc<ServerState>, norm: &str) -> LocalOutcome {
                     Some(created.to_string()),
                 ]);
             }
+            // SQL Server 后端池（dbType=mssql/sqlserver）
+            for (name, pool) in state.mssql_pools.read().iter() {
+                let (idle, permits, created) = pool.snapshot();
+                rows.push(vec![
+                    Some(name.clone()),
+                    Some(idle.to_string()),
+                    Some(permits.to_string()),
+                    Some(created.to_string()),
+                ]);
+            }
             rows.sort_by(|a, b| a[0].cmp(&b[0]));
             LocalOutcome::Rows {
                 columns: vec![col("NAME"), col("IDLE"), col("AVAILABLE"), col("CREATED")],

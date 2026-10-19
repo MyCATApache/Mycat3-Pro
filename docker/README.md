@@ -1,7 +1,7 @@
 # Mycat3 Pro
 
 Mycat3 的 Rust 重新实现：一个进程同时提供 **MySQL / PostgreSQL / SQL Server(TDS)** 三种前端协议
-（同端口嗅探），支持 **MySQL / PostgreSQL / Oracle** 三种后端，可选**分片路由**或**纯代理**模式。
+（同端口嗅探），支持 **MySQL / PostgreSQL / Oracle / SQL Server** 四种后端，可选**分片路由**或**纯代理**模式。
 
 - 镜像：`mycat/mycat3-pro`（`latest`、`v0.3.0`）
 - 平台：`linux/amd64`、`linux/arm64`（由发布工作流构建多架构 manifest）
@@ -9,6 +9,9 @@ Mycat3 的 Rust 重新实现：一个进程同时提供 **MySQL / PostgreSQL / S
 - Dockerfile：https://github.com/MyCATApache/Mycat3-Pro/blob/main/Dockerfile
 - Docker 指南：https://github.com/MyCATApache/Mycat3-Pro/blob/main/docs/docker.md
 - 可运行示例：https://github.com/MyCATApache/Mycat3-Pro/tree/main/examples/docker
+- SQL Server 后端说明：https://github.com/MyCATApache/Mycat3-Pro/tree/main/examples/docker/sharding-sqlserver
+
+> SQL Server 后端需使用包含 `dbType=mssql` 的新镜像；旧版 `latest` 可先按源码重建。
 
 ## 快速开始
 
@@ -71,7 +74,7 @@ mysql -h127.0.0.1 -P8066 -uroot -p123456 -Ddb1 -e "select * from orders"
 ## 配置
 
 `/opt/mycat3-pro/conf`：`server.json`、`users/`、`datasources/`、`clusters/`、`schemas/`、`sqlcaches/`。
-与 Java 版 Mycat3 配置格式兼容。后端示例（MySQL/PostgreSQL/Oracle）、TLS、健康检查、
+与 Java 版 Mycat3 配置格式兼容。后端示例（MySQL/PostgreSQL/Oracle/SQL Server）、TLS、健康检查、
 多架构构建与故障排查见 [docs/docker.md](https://github.com/MyCATApache/Mycat3-Pro/blob/main/docs/docker.md)。
 
 ## 校验
