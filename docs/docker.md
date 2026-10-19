@@ -233,6 +233,10 @@ DOCKERHUB_USER=<账号> DOCKERHUB_TOKEN=<PAT> ./scripts/publish-dockerhub.sh
 | `DOCKERHUB_USERNAME` | 有 `mycat` 命名空间写权限的 Docker Hub 账号 |
 | `DOCKERHUB_TOKEN` | Docker Hub PAT（Read & Write） |
 
+> 把本工作流文件推送到 GitHub 的账号还需要 GitHub `workflow` 权限：
+> classic PAT 勾选 `repo` + `workflow`；fine-grained PAT 授予
+> Contents、Workflows、Actions、Secrets 的读写权限。
+
 触发方式：
 
 - 推送 `v*` 标签（自动构建并发布该版本 + `latest`）
