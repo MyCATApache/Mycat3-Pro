@@ -25,7 +25,7 @@ mysql / psql / sqlcmd
 
 ```bash
 cd examples/docker/sharding-sqlserver
-docker compose up -d --wait
+docker compose up -d --build --wait
 ./demo.sh
 ```
 

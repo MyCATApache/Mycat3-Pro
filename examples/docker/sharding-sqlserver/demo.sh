@@ -21,7 +21,7 @@ mysql_run() {
 mysql_quiet() { "${MYSQL[@]}" "$@" >/dev/null 2>&1; }
 
 section "启动 SQL Server 2022 + 初始化 db1/schema + Mycat3 Pro"
-"${COMPOSE[@]}" up -d
+"${COMPOSE[@]}" up -d --build
 for _ in $(seq 1 180); do
     if curl -fsS "$HTTP/-/healthy" >/dev/null 2>&1; then break; fi
     sleep 2
