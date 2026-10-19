@@ -12,7 +12,7 @@
 #   不要使用账号密码；账号必须拥有镜像命名空间（默认 mycat）的写权限。
 # - 未提供 DOCKERHUB_* 时，推送沿用本机已有 docker login；此时无法通过脚本
 #   更新 Hub 描述（脚本不读取 Docker 凭据文件），会打印手动操作提示。
-# - 默认推送已构建的本地镜像（v<version> 先推、latest 后推）；设置 PLATFORMS
+# - 默认推送已构建的本地镜像（v<version>/<version> 先推、latest 后推）；设置 PLATFORMS
 #   则用 buildx 重新构建多架构并推送（不会使用本地镜像层）。
 # - --description-only 只更新 Docker Hub 仓库简介，需要 DOCKERHUB_*。
 set -euo pipefail
@@ -65,7 +65,7 @@ fi
 VERSION="${VERSION#v}"
 [ -n "$VERSION" ] || die "无法确定版本号，请显式设置 VERSION"
 
-TAGS=("v${VERSION}" "latest")
+TAGS=("v${VERSION}" "${VERSION}" "latest")
 if [ "$VERSION" = "latest" ]; then
     TAGS=("latest")
 fi
@@ -145,7 +145,7 @@ if [ "$DESCRIPTION_ONLY" -eq 0 ]; then
             docker push "$IMAGE:$tag"
         done
     fi
-    info "镜像推送完成: $IMAGE:latest, $IMAGE:v$VERSION"
+    info "镜像推送完成: $IMAGE:latest, $IMAGE:v$VERSION, $IMAGE:$VERSION"
 fi
 
 if [ "$SKIP_DESCRIPTION" -eq 1 ]; then

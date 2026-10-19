@@ -3,7 +3,7 @@
 官方镜像：**`mycat/mycat3-pro`**（Docker Hub）。同一镜像包含分片模式与纯代理模式，
 由 `server.json` 的 `mode` 决定，无需不同镜像。
 
-- 标签：`latest`（最新构建）、`v0.3.0`（版本快照）
+- 标签：`latest`（最新构建）、`v0.3.0` 与 `0.3.0`（版本快照，同 digest）
 - 架构：`linux/amd64`（本地构建）；GitHub Actions 发布工作流同时构建 `linux/arm64`
 - 端口：`8066`（MySQL / PostgreSQL / TDS 三协议同端口）、`9066`（监控 HTTP）
 - 配置目录：`/opt/mycat3-pro/conf`（镜像内已带示例配置，建议挂载覆盖）
@@ -187,26 +187,26 @@ HEALTHCHECK CMD curl -fsS http://127.0.0.1:9066/-/healthy || exit 1
 
 ```bash
 # 本机架构
-docker build -t mycat/mycat3-pro:latest -t mycat/mycat3-pro:v0.3.0 .
+docker build -t mycat/mycat3-pro:latest -t mycat/mycat3-pro:v0.3.0 -t mycat/mycat3-pro:0.3.0 .
 
 # 多架构（需 QEMU/binfmt）
 docker buildx build --platform linux/amd64,linux/arm64 \
   --build-arg VERSION=0.3.0 \
-  -t mycat/mycat3-pro:latest -t mycat/mycat3-pro:v0.3.0 --push .
+  -t mycat/mycat3-pro:latest -t mycat/mycat3-pro:v0.3.0 -t mycat/mycat3-pro:0.3.0 --push .
 ```
 
 `.dockerignore` 已排除 `target/`（20GB 构建产物）与本地测试环境，构建上下文很小。
 
 ## 发布镜像到 Docker Hub（维护者）
 
-镜像名固定为 `mycat/mycat3-pro`，标签为 `latest` 与 `v<version>`。
+镜像名固定为 `mycat/mycat3-pro`，标签为 `latest` 与 `v<version>` / `<version>`（两个版本别名同 digest）。
 发布账号必须拥有 Docker Hub `mycat` 命名空间的写权限；其余账号只能推送到自己的命名空间。
 
 ### 本地发布
 
 ```bash
 # 1. 先本地构建（或直接使用已有的 mycat/mycat3-pro:latest）
-docker build -t mycat/mycat3-pro:latest -t mycat/mycat3-pro:v0.3.0 .
+docker build -t mycat/mycat3-pro:latest -t mycat/mycat3-pro:v0.3.0 -t mycat/mycat3-pro:0.3.0 .
 
 # 2. 预演：只打印计划，不登录、不推送
 ./scripts/publish-dockerhub.sh --dry-run
@@ -216,7 +216,7 @@ DOCKERHUB_USER=<账号> DOCKERHUB_TOKEN=<PAT> ./scripts/publish-dockerhub.sh
 ```
 
 - `DOCKERHUB_TOKEN` 使用 Docker Hub **Personal Access Token**（Read & Write），不要用账号密码。
-- 脚本先推 `v0.3.0`，再推 `latest`；成功后用 `docker/README.md` 更新 Hub 仓库简介。
+- 脚本先推 `v0.3.0`、`0.3.0`，再推 `latest`；成功后用 `docker/README.md` 更新 Hub 仓库简介。
 - 未设置 `DOCKERHUB_*` 时沿用本机 `docker login` 凭据，但会跳过简介更新；
   也可单独运行 `... --description-only` 更新简介。
 - 只推本地单架构镜像会覆盖同名多架构 manifest；需要 arm64 时用
@@ -239,11 +239,18 @@ DOCKERHUB_USER=<账号> DOCKERHUB_TOKEN=<PAT> ./scripts/publish-dockerhub.sh
 
 触发方式：
 
-- 推送 `v*` 标签（自动构建并发布该版本 + `latest`）
+- 推送 `v*` 标签（自动构建并发布该版本、`v<version>`/`<version>` 与 `latest`）
 - Actions 页面手动运行 **Docker Publish**（可指定版本、是否更新 `latest`、目标平台）
 
 工作流使用 QEMU 构建 `linux/amd64,linux/arm64`，推送 manifest 后调用
 `scripts/publish-dockerhub.sh --description-only` 同步 Hub 简介。
+
+### 补标签（不重新构建）
+
+已有镜像需要补版本别名时，运行 `.github/workflows/docker-retag.yml`：
+`source=0.3.0`、`target=v0.3.0`。工作流用 `docker buildx imagetools create`
+复制 manifest list，不会重新编译；最后会 inspect 源标签、目标标签和 `latest`，
+确认多架构平台列表。
 
 > Docker Hub 的 `hub.docker.com` / `registry-1.docker.io` 在部分网络环境不可达
 > （典型表现是 DNS 解析异常或连接超时）。本地发布需要能访问 Docker Hub；

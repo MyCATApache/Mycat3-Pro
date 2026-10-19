@@ -64,7 +64,9 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=semver,pattern={{version}}
+            type=semver,pattern=v{{version}}
             type=raw,value=${{ github.event.inputs.version || '0.3.0' }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=v${{ github.event.inputs.version || '0.3.0' }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=raw,value=latest,enable=${{ github.event_name == 'push' || inputs.push_latest }}
 
       - name: Build and push (multi-arch)
