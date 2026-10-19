@@ -1,0 +1,16 @@
+{
+  "name": "ds0",
+  "url": "jdbc:mysql://mysql:3306/demo",
+  "user": "root",
+  "password": "mysql_root_pw",
+  "dbType": "mysql",
+  "weight": 1,
+  "maxCon": 20,
+  "minCon": 1,
+  "maxRetryCount": 3,
+  "maxConnectTimeout": 5000,
+  "initSqls": [],
+  "instanceType": "READ_WRITE",
+  "idleTimeout": 60000,
+  "type": "NATIVE"
+}

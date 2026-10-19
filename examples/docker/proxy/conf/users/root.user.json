@@ -1,0 +1,11 @@
+{
+  "username": "root",
+  "password": "123456",
+  "ip": null,
+  "transactionType": "proxy",
+  "dialect": "mysql",
+  "schemas": ["demo"],
+  "isolation": 3,
+  "readOnly": false,
+  "loginLimit": -1
+}

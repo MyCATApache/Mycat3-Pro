@@ -128,15 +128,25 @@ sqlcmd -S 127.0.0.1,8066 -U root -P 123456   # 需 encrypt=false（TDS 无 TLS�
 
 ### Docker
 
+官方镜像：`mycat/mycat3-pro:latest`（Docker Hub；`v0.3.0` 版本标签同源）。
+
 ```bash
-# 单镜像
-docker build -t mycat3-pro .
-docker run -d -p 8066:8066 -p 9066:9066 -v $PWD/conf:/opt/mycat3-pro/conf mycat3-pro
+# 直接使用发布镜像（分片模式）
+docker run -d --name mycat3-pro -p 8066:8066 -p 9066:9066 \
+  -v "$PWD/conf:/opt/mycat3-pro/conf:ro" mycat/mycat3-pro:latest
+
+# 源码构建（可选）
+docker build -t mycat/mycat3-pro:latest .
 
 # 完整演示环境（MySQL 主从 + Mycat3 Pro，自动建分片库表）
 docker compose up -d
 mysql -h127.0.0.1 -P8066 -uroot -p123456 -Ddb1 -e "select * from orders"
+
+# 纯代理模式示例（MySQL + 代理，拦截 DDL）
+docker compose -f examples/docker/proxy.compose.yml up -d
 ```
+
+容器细节（端口/卷/TLS/后端示例/健康检查/多架构）见 [docs/docker.md](docs/docker.md)。
 
 ### 试用示例
 
@@ -184,6 +194,7 @@ conf/
 - [docs/configuration.md](docs/configuration.md) — 配置参考
 - [docs/commands.md](docs/commands.md) — SQL/管理命令参考与能力边界
 - [docs/compatibility.md](docs/compatibility.md) — 与 Mycat3 Java 版的兼容性与差异（含修复清单）
+- [docs/docker.md](docs/docker.md) — Docker 镜像使用指南（两种模式、TLS、多后端、多架构）
 
 ## 与 Java 版的主要差异
 

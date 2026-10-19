@@ -1,0 +1,27 @@
+# Mycat3 Pro 纯代理模式示例：一个 MySQL 后端 + 代理（拦截 DDL / 慢 SQL / SQL 缓存）
+# 启动: docker compose -f examples/docker/proxy.compose.yml up -d
+# 连接: mysql -h127.0.0.1 -P18066 -uroot -p123456 -Ddemo
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: mysql_root_pw
+    volumes:
+      - ./proxy/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-pmysql_root_pw"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  mycat3-pro:
+    image: mycat/mycat3-pro:latest
+    restart: unless-stopped
+    ports:
+      - "18066:8066"
+      - "19066:9066"
+    volumes:
+      - ./proxy/conf:/opt/mycat3-pro/conf
+    depends_on:
+      mysql:
+        condition: service_healthy

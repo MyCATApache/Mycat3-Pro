@@ -211,12 +211,33 @@ async fn run_start(home: PathBuf, cfg: MycatRouterConfig) -> anyhow::Result<()> 
             });
         }
 
-        // Ctrl-C 优雅停机
+        // 优雅停机：SIGINT（Ctrl-C）与 SIGTERM（docker stop / k8s）
         let server = start_server(state.clone());
+        let shutdown = async {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                match signal(SignalKind::terminate()) {
+                    Ok(mut term) => {
+                        tokio::select! {
+                            _ = tokio::signal::ctrl_c() => {}
+                            _ = term.recv() => {}
+                        }
+                    }
+                    Err(_) => {
+                        let _ = tokio::signal::ctrl_c().await;
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        };
         tokio::select! {
             r = server => { r?; }
-            _ = tokio::signal::ctrl_c() => {
-                info!("SIGINT received, shutting down");
+            _ = shutdown => {
+                info!("shutdown signal received, shutting down");
             }
         }
         Ok(())

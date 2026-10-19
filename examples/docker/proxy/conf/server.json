@@ -1,0 +1,21 @@
+{
+  "mode": "proxy",
+  "server": {
+    "mycatId": 1,
+    "ip": "0.0.0.0",
+    "port": 8066,
+    "reactorNumber": 2,
+    "serverVersion": "5.7.33-mycat-3.0-pro",
+    "deprecateEof": true,
+    "protocolSniff": true,
+    "executeTimeout": 0
+  },
+  "monitor": { "open": true, "ip": "0.0.0.0", "port": 9066, "sqlLog": false },
+  "proxy": {
+    "target": "ds0",
+    "intercepts": [
+      { "pattern": "(?i)drop\\s+table", "stmtType": "DDL",
+        "errno": 1142, "message": "DDL is blocked by proxy policy" }
+    ]
+  }
+}

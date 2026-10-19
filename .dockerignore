@@ -1,0 +1,11 @@
+# 构建上下文排除（避免把 20GB target/ 与本地测试环境打进镜像）
+target/
+dist/
+.git/
+.github/
+.smoke-*/
+.zcode/
+*.log
+*.pid
+mycat-home/
+docs/

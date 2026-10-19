@@ -32,12 +32,19 @@ services:
     depends_on:
       mysql-master:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9066/-/healthy"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 5
     volumes:
       - ./docker/init-replica.sql:/docker-entrypoint-initdb.d/init.sql:ro
 
   mycat3-pro:
     build: .
-    image: mycat3-pro:latest
+    image: mycat/mycat3-pro:latest
+    restart: unless-stopped
     ports:
       - "8066:8066"   # MySQL 协议端口
       - "9066:9066"   # 监控 HTTP 端口
@@ -49,3 +56,9 @@ services:
     depends_on:
       mysql-master:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9066/-/healthy"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 5
