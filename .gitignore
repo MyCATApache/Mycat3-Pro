@@ -12,3 +12,9 @@ logs/
 
 # 运行数据（mycat home 的缓存/备份）
 mycat-home/
+
+# demo 运行时数据（缓存/XA/配置备份）
+examples/docker/**/conf/cache/
+examples/docker/**/conf/xa/
+examples/docker/**/conf/backup/
+examples/docker/**/conf/logs/

@@ -1,0 +1,10 @@
+{
+  "name": "category_stats",
+  "sql": "select category, count(*) as cnt from t_product group by category order by category",
+  "refreshInterval": 60,
+  "initialDelay": 0,
+  "matchMode": "EXACT",
+  "maxRows": 100,
+  "maxBytes": 65536,
+  "schemaName": "demo"
+}

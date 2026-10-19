@@ -1,0 +1,34 @@
+{
+  "schemaName": "db1",
+  "targetName": "c0",
+  "shardingTables": {
+    "orders": {
+      "createTableSQL": "CREATE TABLE orders(id BIGINT PRIMARY KEY, user_id BIGINT, amount DECIMAL(12,2), status VARCHAR(16), created DATETIME)",
+      "partition": {
+        "data": [
+          ["ds0", "db1_0", "orders_0"],
+          ["ds1", "db1_1", "orders_1"]
+        ]
+      },
+      "function": {
+        "clazz": "PartitionByMod",
+        "properties": {"columnName": "id", "count": "2"}
+      }
+    }
+  },
+  "globalTables": {
+    "dict": {
+      "createTableSQL": "CREATE TABLE dict(id BIGINT PRIMARY KEY, name VARCHAR(64))",
+      "broadcast": [
+        {"targetName": "ds0", "schemaName": "db1_0"},
+        {"targetName": "ds1", "schemaName": "db1_1"}
+      ]
+    }
+  },
+  "normalTables": {
+    "user_info": {
+      "createTableSQL": "CREATE TABLE user_info(id BIGINT PRIMARY KEY, name VARCHAR(64), profile VARCHAR(255))",
+      "locality": {"targetName": "ds0", "schemaName": "db1_0", "tableName": "user_info"}
+    }
+  }
+}

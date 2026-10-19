@@ -1,0 +1,49 @@
+{
+  "mode": "proxy",
+  "server": {
+    "mycatId": 1,
+    "ip": "0.0.0.0",
+    "port": 8066,
+    "reactorNumber": 2,
+    "serverVersion": "5.7.33-mycat-3.0-pro",
+    "deprecateEof": true,
+    "protocolSniff": true,
+    "executeTimeout": 30000
+  },
+  "monitor": {
+    "ip": "0.0.0.0",
+    "port": 9066,
+    "open": true,
+    "sqlLog": false
+  },
+  "proxy": {
+    "target": "ds0",
+    "intercepts": [
+      {
+        "pattern": "^\\s*drop\\s+table\\b",
+        "stmtType": "DDL",
+        "errno": 1142,
+        "sqlstate": "42000",
+        "message": "proxy policy: DROP TABLE is blocked"
+      },
+      {
+        "pattern": "^\\s*truncate\\s+table\\b",
+        "stmtType": "DDL",
+        "errno": 1142,
+        "sqlstate": "42000",
+        "message": "proxy policy: TRUNCATE TABLE is blocked"
+      },
+      {
+        "pattern": "^\\s*delete\\s+from\\s+[a-zA-Z0-9_`\\.]+\\s*;?\\s*$",
+        "stmtType": "DML",
+        "errno": 1142,
+        "sqlstate": "42000",
+        "message": "proxy policy: DELETE without WHERE is blocked"
+      }
+    ]
+  },
+  "loadBalance": {
+    "defaultLoadBalance": "BalanceRandom",
+    "loadBalances": []
+  }
+}

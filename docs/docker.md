@@ -50,10 +50,28 @@ docker run --rm mycat/mycat3-pro:latest version
 docker run --rm -v "$PWD/conf:/opt/mycat3-pro/conf:ro" mycat/mycat3-pro:latest check --home /opt/mycat3-pro/conf
 ```
 
+## 可运行示例库
+
+`examples/docker/` 下提供一组 **纯 Docker Compose** 示例，覆盖代理模式和分片模式：
+
+| 示例 | 内容 |
+|---|---|
+| [`proxy-mysql`](../examples/docker/proxy-mysql/README.md) | SQL 缓存（EXACT/PARAMETERIZED）、SQL 拦截、慢 SQL、会话固定连接、HTTP API |
+| [`sharding-mysql`](../examples/docker/sharding-mysql/README.md) | 取模/枚举/月份/广播/单表 + MySQL XA 2PC |
+| [`sharding-postgresql`](../examples/docker/sharding-postgresql/README.md) | PG schema 分片、大小写/引号、手工 DDL、PG XA |
+| [`sharding-oracle`](../examples/docker/sharding-oracle/README.md) | Oracle 双 schema、大写标识符、NLS、无 XA |
+| [`tds-frontend`](../examples/docker/tds-frontend/README.md) | SQL Server 客户端（TDS）接入；**SQL Server 不是后端** |
+| [`performance`](../examples/docker/performance/README.md) | 线程/超时/连接池/缓存参数实验 |
+| [`README`](../examples/docker/README.md) | 端口、凭据、运行方式与 SQL Server 后端边界 |
+
+全部示例默认使用 `mycat/mycat3-pro:latest`；SQL Server 只作为**前端 TDS 协议**支持，
+后端目前只有 MySQL / PostgreSQL / Oracle。
+
 ## 纯代理模式（proxy-only）
 
-`examples/docker/proxy.compose.yml` 提供可直接运行的示例：一个 MySQL 后端 +
-代理（拦截 DDL、可加 SQL 缓存/慢 SQL）。关键配置：
+`examples/docker/proxy.compose.yml` 提供最小代理示例；完整版
+[`examples/docker/proxy-mysql`](../examples/docker/proxy-mysql/README.md) 覆盖缓存、拦截、
+慢 SQL 与会话语义。关键配置：
 
 ```json
 {

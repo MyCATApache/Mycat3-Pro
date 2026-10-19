@@ -263,7 +263,9 @@ information_schema 查询支持等值 / `DATABASE()` / LIKE 谓词过滤与投�
 --   - 冷缓存每键（预读/每变体）并发共享一次在途执行（等待语义）；
 --   - 命中判定：SELECT ∧ 非事务 ∧ autocommit=1 ∧ 无 hint；键含 schema（修掉 Java 跨库撞键）；
 --   - 命中路径性能：原始文本 O(1) 快路径（可预读条目）；无缓存项零开销短路；
---   - DML 不自动失效（与 Java 一致）；maxRows/maxBytes 超限不缓存（回落正常执行）。
+--   - 写入后失效：Pro 在 DML/DDL 成功后按表名 token 保守清理相关缓存（内存结果 + .bin 文件），
+  宁可多失效也不返回旧数据（Java 版不失效）；跨库同名表可能被一并清理；
+  maxRows/maxBytes 超限不缓存（回落正常执行）。
 /*!mycat:showSqlCaches*/;  -- NAME/SQL/REFRESH_INTERVAL_S/MATCH_MODE/HAS_CACHE/HITS/MISSES/FILE_BYTES
 /*!mycat:dropSqlCache={"name":"cnt1"}*/
 ```

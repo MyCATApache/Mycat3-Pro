@@ -1,0 +1,57 @@
+# Mycat3 Pro 分库分表示例（Oracle 后端）
+# 注意：Oracle Free 首次启动较慢（通常 2–5 分钟），需要约 4GB 内存/10GB 磁盘。
+# 启动: docker compose up -d
+# 连接: docker compose exec oracle sqlplus DB1_0/demo_pw@//localhost:1521/FREEPDB1
+name: mycat3-sharding-oracle
+
+services:
+  oracle:
+    image: container-registry.oracle.com/database/free:latest
+    environment:
+      ORACLE_PWD: oracle_demo_pw
+      ORACLE_CHARACTERSET: AL32UTF8
+      TZ: Asia/Shanghai
+    ports:
+      - "11521:1521"
+    shm_size: "1gb"
+    volumes:
+      # 预构建镜像每次启动执行 /opt/oracle/scripts/startup/*.sql（sysdba）；脚本按幂等编写
+      - ./init:/opt/oracle/scripts/startup:ro
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'select 1 from dual;' | sqlplus -s system/$$ORACLE_PWD@//localhost:1521/FREEPDB1 | grep -Eq '^[[:space:]]*1[[:space:]]*$'"]
+      interval: 20s
+      timeout: 10s
+      start_period: 300s
+      retries: 30
+
+  # 可选的 MySQL 协议客户端（TDS/psql 也可连同一 8066 端口）
+  mysql-client:
+    image: mysql:8.0
+    profiles: ["client"]
+    entrypoint: ["mysql"]
+    environment:
+      MYSQL_PWD: "123456"
+    depends_on:
+      mycat3-pro:
+        condition: service_healthy
+
+  mycat3-pro:
+    image: mycat/mycat3-pro:latest
+    restart: unless-stopped
+    ports:
+      - "48066:8066"
+      - "49066:9066"
+    environment:
+      MYCAT3_PRO_HOME: /opt/mycat3-pro/conf
+      TZ: Asia/Shanghai
+    volumes:
+      - ./conf:/opt/mycat3-pro/conf
+    depends_on:
+      oracle:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9066/-/healthy"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 10

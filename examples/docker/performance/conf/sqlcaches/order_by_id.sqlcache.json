@@ -1,0 +1,10 @@
+{
+  "name": "order_by_id",
+  "sql": "select id, user_id, amount, status from orders where id = ?",
+  "refreshInterval": 15,
+  "initialDelay": 0,
+  "matchMode": "PARAMETERIZED",
+  "maxRows": 100,
+  "maxBytes": 65536,
+  "schemaName": "db1"
+}

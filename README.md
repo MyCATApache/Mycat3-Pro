@@ -128,7 +128,7 @@ sqlcmd -S 127.0.0.1,8066 -U root -P 123456   # 需 encrypt=false（TDS 无 TLS�
 
 ### Docker
 
-官方镜像：`mycat/mycat3-pro:latest`（Docker Hub；`v0.3.0` 版本标签同源）。
+官方镜像：`mycat/mycat3-pro:latest`（Docker Hub；`v0.3.0` / `0.3.0` 版本标签同 digest）。
 
 ```bash
 # 直接使用发布镜像（分片模式）
@@ -146,7 +146,19 @@ mysql -h127.0.0.1 -P8066 -uroot -p123456 -Ddb1 -e "select * from orders"
 docker compose -f examples/docker/proxy.compose.yml up -d
 ```
 
-容器细节（端口/卷/TLS/后端示例/健康检查/多架构/发布流程）见 [docs/docker.md](docs/docker.md)。
+完整 Compose 示例库见 [examples/docker/README.md](examples/docker/README.md)：
+
+| 示例 | 重点 |
+|---|---|
+| [proxy-mysql](examples/docker/proxy-mysql/README.md) | SQL 结果缓存、SQL 拦截、慢 SQL、会话固定连接、HTTP API |
+| [sharding-mysql](examples/docker/sharding-mysql/README.md) | 取模/枚举/月份/广播/单表 + MySQL XA |
+| [sharding-postgresql](examples/docker/sharding-postgresql/README.md) | PG schema 分片、引号/大小写、PG XA |
+| [sharding-oracle](examples/docker/sharding-oracle/README.md) | Oracle 双 schema、手工物理表、NLS、无 XA |
+| [tds-frontend](examples/docker/tds-frontend/README.md) | SQL Server 客户端（TDS）接入；SQL Server 不是后端 |
+| [performance](examples/docker/performance/README.md) | 线程/超时/连接池/缓存参数与容量区间 |
+
+容器细节（端口/卷/TLS/后端示例/健康检查/多架构/发布流程）见 [docs/docker.md](docs/docker.md)，
+性能参数与容量规划见 [docs/performance.md](docs/performance.md)。
 
 ### 试用示例
 
@@ -195,6 +207,8 @@ conf/
 - [docs/commands.md](docs/commands.md) — SQL/管理命令参考与能力边界
 - [docs/compatibility.md](docs/compatibility.md) — 与 Mycat3 Java 版的兼容性与差异（含修复清单）
 - [docs/docker.md](docs/docker.md) — Docker 镜像使用指南（两种模式、TLS、多后端、多架构）
+- [docs/performance.md](docs/performance.md) — 性能参数、容量预算、场景区间与调优顺序
+- [examples/docker/README.md](examples/docker/README.md) — Compose 示例库（代理/分片/多后端/性能）
 
 ## 与 Java 版的主要差异
 
@@ -236,6 +250,7 @@ crates/
                 # 本地命令(commands)、事务(tx)、监控(monitor)、CLI (mycat3-pro)
 conf/           # 默认配置（2 数据源 + 分片/广播/单表演示）
 docker/         # compose 演示环境初始化 SQL 与容器配置
+examples/       # Docker Compose 示例库（代理模式、分片、PG/Oracle/TDS、性能）
 scripts/        # 启动/停止、Docker Hub 发布脚本
 docs/           # 文档
 tests/          # （预留）跨 crate 测试

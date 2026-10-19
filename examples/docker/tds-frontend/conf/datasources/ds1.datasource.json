@@ -1,0 +1,15 @@
+{
+  "name": "ds1",
+  "url": "jdbc:mysql://mysql:3306/db1_1?useUnicode=true&characterEncoding=UTF-8",
+  "user": "root",
+  "password": "tds_root_pw",
+  "dbType": "mysql",
+  "weight": 1,
+  "maxCon": 8,
+  "minCon": 1,
+  "maxConnectTimeout": 3000,
+  "initSqls": [],
+  "instanceType": "READ_WRITE",
+  "idleTimeout": 60000,
+  "type": "NATIVE"
+}

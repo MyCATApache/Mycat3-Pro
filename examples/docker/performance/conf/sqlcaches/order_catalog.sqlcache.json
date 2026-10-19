@@ -1,0 +1,10 @@
+{
+  "name": "order_catalog",
+  "sql": "select id, user_id, amount, status from orders order by id",
+  "refreshInterval": 30,
+  "initialDelay": 0,
+  "matchMode": "EXACT",
+  "maxRows": 1000,
+  "maxBytes": 1048576,
+  "schemaName": "db1"
+}

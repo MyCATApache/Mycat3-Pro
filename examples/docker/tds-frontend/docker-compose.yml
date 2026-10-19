@@ -1,0 +1,57 @@
+# Mycat3 Pro：SQL Server (TDS) 前端接入示例
+# 注意：这是 SQL Server 客户端 -> Mycat -> MySQL 后端；Mycat 不提供 SQL Server 后端驱动。
+# 启动: docker compose up -d --wait
+# TDS 查询: docker compose run --rm -T tds-client -S mycat3-pro,8066 -U root -P 123456 -d db1 -Q "select 1"
+name: mycat3-tds-frontend
+
+services:
+  mysql:
+    image: mysql:8.0
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_0900_ai_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: tds_root_pw
+      MYSQL_DATABASE: db1_0
+      TZ: Asia/Shanghai
+    ports:
+      - "13319:3306"
+    volumes:
+      - ./init/01-shard.sql:/docker-entrypoint-initdb.d/01-shard.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  mycat3-pro:
+    image: mycat/mycat3-pro:latest
+    restart: unless-stopped
+    ports:
+      - "58066:8066"   # MySQL / PostgreSQL / TDS 同端口
+      - "59066:9066"
+    environment:
+      MYCAT3_PRO_HOME: /opt/mycat3-pro/conf
+      TZ: Asia/Shanghai
+    volumes:
+      - ./conf:/opt/mycat3-pro/conf
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9066/-/healthy"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 10
+
+  # SQL Server 命令行客户端（TDS 7.x）；只在需要时启动：
+  # docker compose run --rm -T tds-client ...
+  tds-client:
+    image: mcr.microsoft.com/mssql-tools:latest
+    profiles: ["client"]
+    entrypoint: ["/opt/mssql-tools/bin/sqlcmd"]
+    depends_on:
+      mycat3-pro:
+        condition: service_healthy

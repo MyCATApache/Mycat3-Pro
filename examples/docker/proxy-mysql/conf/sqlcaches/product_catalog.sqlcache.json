@@ -1,0 +1,10 @@
+{
+  "name": "product_catalog",
+  "sql": "select id, name, price, category from t_product order by id",
+  "refreshInterval": 300,
+  "initialDelay": 0,
+  "matchMode": "EXACT",
+  "maxRows": 1000,
+  "maxBytes": 1048576,
+  "schemaName": "demo"
+}

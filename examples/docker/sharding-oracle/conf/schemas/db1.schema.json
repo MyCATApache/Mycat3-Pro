@@ -1,0 +1,93 @@
+{
+  "schemaName": "db1",
+  "targetName": "c0",
+  "shardingTables": {
+    "orders": {
+      "createTableSQL": "CREATE TABLE orders(id BIGINT PRIMARY KEY, user_id BIGINT, amount DECIMAL(12,2), status VARCHAR(16), created DATETIME)",
+      "partition": {
+        "data": [
+          [
+            "ds0",
+            "DB1_0",
+            "ORDERS_0"
+          ],
+          [
+            "ds0",
+            "DB1_0",
+            "ORDERS_1"
+          ],
+          [
+            "ds1",
+            "DB1_1",
+            "ORDERS_2"
+          ],
+          [
+            "ds1",
+            "DB1_1",
+            "ORDERS_3"
+          ]
+        ]
+      },
+      "function": {
+        "clazz": "PartitionByMod",
+        "properties": {
+          "columnName": "id",
+          "count": "4"
+        }
+      }
+    },
+    "tenant_order": {
+      "createTableSQL": "CREATE TABLE tenant_order(id BIGINT PRIMARY KEY, tenant_id VARCHAR(32), note VARCHAR(128), created DATETIME)",
+      "partition": {
+        "data": [
+          [
+            "ds0",
+            "DB1_0",
+            "TENANT_ORDER_0"
+          ],
+          [
+            "ds1",
+            "DB1_1",
+            "TENANT_ORDER_1"
+          ]
+        ]
+      },
+      "function": {
+        "clazz": "PartitionByFileMap",
+        "properties": {
+          "columnName": "tenant_id",
+          "defaultNode": "0"
+        },
+        "ranges": {
+          "acme": "0",
+          "globex": "1"
+        }
+      }
+    }
+  },
+  "globalTables": {
+    "dict": {
+      "createTableSQL": "CREATE TABLE dict(id BIGINT PRIMARY KEY, name VARCHAR(64))",
+      "broadcast": [
+        {
+          "targetName": "ds0",
+          "schemaName": "DB1_0"
+        },
+        {
+          "targetName": "ds1",
+          "schemaName": "DB1_1"
+        }
+      ]
+    }
+  },
+  "normalTables": {
+    "user_info": {
+      "createTableSQL": "CREATE TABLE user_info(id BIGINT PRIMARY KEY, name VARCHAR(64), profile VARCHAR(255))",
+      "locality": {
+        "targetName": "ds0",
+        "schemaName": "DB1_0",
+        "tableName": "USER_INFO"
+      }
+    }
+  }
+}

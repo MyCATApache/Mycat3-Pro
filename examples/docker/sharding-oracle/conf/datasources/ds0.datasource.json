@@ -1,0 +1,15 @@
+{
+  "name": "ds0",
+  "url": "jdbc:oracle:thin:@//oracle:1521/FREEPDB1",
+  "user": "DB1_0",
+  "password": "demo_pw",
+  "dbType": "oracle",
+  "weight": 1,
+  "maxCon": 8,
+  "minCon": 1,
+  "maxConnectTimeout": 5000,
+  "initSqls": ["ALTER SESSION SET NLS_DATE_FORMAT='YYYY-MM-DD HH24:MI:SS'"],
+  "instanceType": "READ_WRITE",
+  "idleTimeout": 60000,
+  "type": "NATIVE"
+}

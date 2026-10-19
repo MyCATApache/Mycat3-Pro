@@ -1,0 +1,15 @@
+{
+  "name": "ds0",
+  "url": "jdbc:mysql://mysql:3306/db1_0?useUnicode=true&characterEncoding=UTF-8",
+  "user": "root",
+  "password": "perf_root_pw",
+  "dbType": "mysql",
+  "weight": 1,
+  "maxCon": 32,
+  "minCon": 4,
+  "maxConnectTimeout": 2000,
+  "initSqls": [],
+  "instanceType": "READ_WRITE",
+  "idleTimeout": 30000,
+  "type": "NATIVE"
+}

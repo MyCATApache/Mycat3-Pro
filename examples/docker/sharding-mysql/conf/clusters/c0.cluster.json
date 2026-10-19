@@ -1,0 +1,16 @@
+{
+  "name": "c0",
+  "clusterType": "SINGLE_NODE",
+  "switchType": "NOT_SWITCH",
+  "readBalanceType": "BALANCE_ALL",
+  "readBalanceName": "BalanceRandom",
+  "masters": ["ds0", "ds1"],
+  "replicas": [],
+  "heartbeat": {
+    "maxRetry": 3,
+    "minSwitchTimeInterval": 300,
+    "heartbeatTimeout": 1000,
+    "slaveThreshold": 0
+  },
+  "maxCon": 200
+}

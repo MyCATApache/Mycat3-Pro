@@ -1,0 +1,15 @@
+{
+  "name": "ds0",
+  "url": "jdbc:mysql://mysql-shard-0:3306/db1_0?useUnicode=true&characterEncoding=UTF-8",
+  "user": "root",
+  "password": "shard_root_pw",
+  "dbType": "mysql",
+  "weight": 1,
+  "maxCon": 16,
+  "minCon": 2,
+  "maxConnectTimeout": 3000,
+  "initSqls": [],
+  "instanceType": "READ_WRITE",
+  "idleTimeout": 60000,
+  "type": "NATIVE"
+}

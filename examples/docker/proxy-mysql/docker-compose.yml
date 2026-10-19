@@ -1,0 +1,48 @@
+# Mycat3 Pro 纯代理模式完整示例
+# 启动: docker compose up -d --wait
+# 连接: docker compose exec mysql mysql -hmycat3-pro -P8066 -uroot -p123456 -Ddemo
+# 一键演示: ./demo.sh
+name: mycat3-proxy-mysql
+
+services:
+  mysql:
+    image: mysql:8.0
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_0900_ai_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: demo_root_pw
+      MYSQL_DATABASE: demo
+      TZ: Asia/Shanghai
+    ports:
+      - "13316:3306"   # 仅用于调试直连后端；不暴露也可
+    volumes:
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  mycat3-pro:
+    image: mycat/mycat3-pro:latest
+    restart: unless-stopped
+    ports:
+      - "18066:8066"   # MySQL / PostgreSQL / TDS 同端口
+      - "19066:9066"   # /-/healthy、/metrics、/api/status、/api/sqlcaches
+    environment:
+      MYCAT3_PRO_HOME: /opt/mycat3-pro/conf
+      TZ: Asia/Shanghai
+    volumes:
+      # 必须可写：SQL 缓存的二进制文件写入 conf/cache/sqlcache/
+      - ./conf:/opt/mycat3-pro/conf
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9066/-/healthy"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 10

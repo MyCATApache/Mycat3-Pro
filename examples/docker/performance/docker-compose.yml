@@ -1,0 +1,47 @@
+# Mycat3 Pro 性能参数示例（MySQL 后端，单实例双 schema）
+# 启动: docker compose up -d --wait
+# 基准: ./bench.sh
+name: mycat3-performance
+
+services:
+  mysql:
+    image: mysql:8.0
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_0900_ai_ci
+      --max-connections=300
+    environment:
+      MYSQL_ROOT_PASSWORD: perf_root_pw
+      MYSQL_DATABASE: db1_0
+      TZ: Asia/Shanghai
+    ports:
+      - "13320:3306"
+    volumes:
+      - ./init/01-data.sql:/docker-entrypoint-initdb.d/01-data.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  mycat3-pro:
+    image: mycat/mycat3-pro:latest
+    restart: unless-stopped
+    ports:
+      - "28067:8066"
+      - "29067:9066"
+    environment:
+      MYCAT3_PRO_HOME: /opt/mycat3-pro/conf
+      TZ: Asia/Shanghai
+    volumes:
+      - ./conf:/opt/mycat3-pro/conf
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9066/-/healthy"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 10

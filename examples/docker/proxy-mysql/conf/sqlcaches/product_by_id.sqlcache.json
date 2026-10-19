@@ -1,0 +1,10 @@
+{
+  "name": "product_by_id",
+  "sql": "select id, name, price, category from t_product where id = ?",
+  "refreshInterval": 120,
+  "initialDelay": 0,
+  "matchMode": "PARAMETERIZED",
+  "maxRows": 100,
+  "maxBytes": 65536,
+  "schemaName": "demo"
+}

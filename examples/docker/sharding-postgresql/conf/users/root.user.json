@@ -1,0 +1,10 @@
+{
+  "username": "root",
+  "password": "123456",
+  "transactionType": "proxy",
+  "dialect": "postgresql",
+  "schemas": ["db1"],
+  "isolation": 3,
+  "readOnly": false,
+  "loginLimit": -1
+}

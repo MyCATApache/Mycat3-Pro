@@ -1,0 +1,25 @@
+SET client_encoding = 'UTF8';
+
+CREATE SCHEMA IF NOT EXISTS db1_1;
+
+CREATE TABLE db1_1.orders_2 (
+  id BIGINT PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  amount NUMERIC(12,2) NOT NULL,
+  status VARCHAR(16) NOT NULL,
+  created TIMESTAMP NOT NULL
+);
+
+CREATE TABLE db1_1.orders_3 (LIKE db1_1.orders_2 INCLUDING ALL);
+
+CREATE TABLE db1_1.tenant_order_1 (
+  id BIGINT PRIMARY KEY,
+  tenant_id VARCHAR(32) NOT NULL,
+  note VARCHAR(128) NOT NULL,
+  created TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE db1_1.dict (
+  id BIGINT PRIMARY KEY,
+  name VARCHAR(64) NOT NULL
+);

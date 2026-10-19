@@ -1,0 +1,65 @@
+# Mycat3 Pro 分库分表示例（PostgreSQL 后端）
+# 启动: docker compose up -d --wait
+# 连接: docker compose exec pg-shard-0 psql "postgresql://root:123456@mycat3-pro:8066/db1?sslmode=disable"
+name: mycat3-sharding-postgresql
+
+services:
+  pg-shard-0:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: pg_root_pw
+      POSTGRES_DB: db1
+      TZ: Asia/Shanghai
+    # XA 演示需要 prepared transaction 槽位；生产按并发 XA 分支数设置
+    command: ["postgres", "-c", "max_prepared_transactions=64", "-c", "max_connections=100"]
+    ports:
+      - "15434:5432"
+    volumes:
+      - ./init/shard0.sql:/docker-entrypoint-initdb.d/01-shard0.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d db1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  pg-shard-1:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: pg_root_pw
+      POSTGRES_DB: db1
+      TZ: Asia/Shanghai
+    command: ["postgres", "-c", "max_prepared_transactions=64", "-c", "max_connections=100"]
+    ports:
+      - "15435:5432"
+    volumes:
+      - ./init/shard1.sql:/docker-entrypoint-initdb.d/01-shard1.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d db1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  mycat3-pro:
+    image: mycat/mycat3-pro:latest
+    restart: unless-stopped
+    ports:
+      - "38066:8066"
+      - "39066:9066"
+    environment:
+      MYCAT3_PRO_HOME: /opt/mycat3-pro/conf
+      TZ: Asia/Shanghai
+    volumes:
+      - ./conf:/opt/mycat3-pro/conf
+    depends_on:
+      pg-shard-0:
+        condition: service_healthy
+      pg-shard-1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9066/-/healthy"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 10

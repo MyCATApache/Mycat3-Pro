@@ -1,0 +1,15 @@
+{
+  "name": "ds1",
+  "url": "jdbc:postgresql://pg-shard-1:5432/db1",
+  "user": "postgres",
+  "password": "pg_root_pw",
+  "dbType": "postgresql",
+  "weight": 1,
+  "maxCon": 12,
+  "minCon": 2,
+  "maxConnectTimeout": 3000,
+  "initSqls": [],
+  "instanceType": "READ_WRITE",
+  "idleTimeout": 60000,
+  "type": "NATIVE"
+}

@@ -70,7 +70,7 @@ Mycat3 Pro 使用与 Mycat3（Java）完全兼容的 JSON 多文件配置。配�
 - `ip`：客户端 IP 正则白名单，空/缺省不限制
 - `schemas`（或 `schema`）：登录后可见的逻辑库；认证包携带的 database 必须已存在于 schemas 配置
 - `isolation`：0=READ-UNCOMMITTED 1=READ-COMMITTED 2=SERIALIZABLE 3=REPEATABLE-READ（默认）
-- `transactionType`：目前仅 `proxy`（本地事务）生效
+- `transactionType`：`proxy`（本地事务，默认）或 `xa`（MySQL/PostgreSQL 2PC）
 
 ## datasources/*.datasource.json
 
@@ -323,7 +323,8 @@ SQL 结果缓存配置（Java 目录/字段兼容 + Pro 扩展）：
 { "name": "seq1", "clazz": "...", "targetName": "c0", "schemaName": "db1", "step": 1, "startWith": 1, "incrementBy": 1 }
 ```
 
-Pro 版加载但不自动填充自增列（INSERT 需显式提供分片列值）。
+Pro 版支持 Snowflake/计数序列，并在分片/广播表 INSERT 省略自增列时自动填充
+（先填充后路由；Oracle 物理表需自行处理 identity/序列）。
 
 ---
 

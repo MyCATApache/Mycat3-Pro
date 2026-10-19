@@ -1,0 +1,10 @@
+{
+  "username": "xa",
+  "password": "123456",
+  "transactionType": "xa",
+  "dialect": "mysql",
+  "schemas": ["db1"],
+  "isolation": 3,
+  "readOnly": false,
+  "loginLimit": -1
+}
