@@ -1,0 +1,93 @@
+name: Docker Hub Verify
+
+# 校验 Docker Hub 镜像是否已发布、平台列表、标签与仓库可见性。
+# 需要与 Docker Publish 相同的 Secrets：DOCKERHUB_USERNAME / DOCKERHUB_TOKEN。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要检查的镜像标签"
+        required: true
+        default: "latest"
+      make_public:
+        description: "若仓库是私有的，是否改为公开"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: mycat/mycat3-pro
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Inspect manifest
+        env:
+          TAG: ${{ inputs.tag }}
+        run: docker buildx imagetools inspect "${IMAGE}:${TAG}"
+
+      - name: Repository metadata
+        env:
+          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          MAKE_PUBLIC: ${{ inputs.make_public }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+
+          user = os.environ["DOCKERHUB_USER"]
+          token = os.environ["DOCKERHUB_TOKEN"]
+          make_public = os.environ.get("MAKE_PUBLIC", "false").lower() == "true"
+
+          def call(url, method="GET", body=None, jwt=None):
+              data = json.dumps(body).encode() if body is not None else None
+              headers = {
+                  "Content-Type": "application/json",
+                  "User-Agent": "mycat3-verify",
+              }
+              if jwt:
+                  headers["Authorization"] = f"JWT {jwt}"
+              req = urllib.request.Request(url, data=data, method=method, headers=headers)
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  raw = r.read()
+                  return json.loads(raw) if raw else None
+
+          login = call(
+              "https://hub.docker.com/v2/users/login/",
+              "POST",
+              {"username": user, "password": token},
+          )
+          jwt = login["token"]
+          repo_url = "https://hub.docker.com/v2/repositories/mycat/mycat3-pro/"
+          repo = call(repo_url, jwt=jwt)
+          print("repository:", repo.get("namespace"), "/", repo.get("name"))
+          print("is_private:", repo.get("is_private"))
+          print("description_set:", bool(repo.get("description")))
+          print("full_description_chars:", len(repo.get("full_description") or ""))
+          print("pull_count:", repo.get("pull_count"))
+
+          if make_public and repo.get("is_private"):
+              call(repo_url, "PATCH", {"is_private": False}, jwt=jwt)
+              repo = call(repo_url, jwt=jwt)
+              print("is_private_after_update:", repo.get("is_private"))
+
+          tags = call(
+              "https://hub.docker.com/v2/repositories/mycat/mycat3-pro/tags/?page_size=100",
+              jwt=jwt,
+          )
+          print("tags:")
+          for t in tags.get("results", []):
+              print(" -", t.get("name"), t.get("last_updated"))
+          PY
