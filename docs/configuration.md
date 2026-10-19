@@ -108,8 +108,9 @@ Mycat3 Pro 使用与 Mycat3（Java）完全兼容的 JSON 多文件配置。配�
 - 用户 `encryptType:"rsa"`+`encodeKey`：RSA 加密密码（Java 兼容）
 - Java server.json 的其余调优键（`ignoreCast`/`rewriteInsertBatchedStatementBatch`/
   `stickySession`/`sendBufferSize`/`asyncDDL` 等约 20 项）**忽略且无效果**（文档化边界）
-- 用户 `transactionType`：`proxy`（默认，本地代理事务）或 `xa`（**MySQL-only XA 2PC**，
-  含决策 WAL `<home>/xa/xa-wal.log` 与启动 `XA RECOVER` 崩溃恢复；Oracle 后端分支显式拒绝）
+- 用户 `transactionType`：`proxy`（默认，本地代理事务）或 `xa`（**MySQL/PostgreSQL XA 2PC**，
+  含决策 WAL `<home>/xa/xa-wal.log`、启动 `XA RECOVER`/`pg_prepared_xacts` 崩溃恢复；
+  Oracle 后端分支显式拒绝）
 - `instanceType`：`READ` / `WRITE` / `READ_WRITE`
 - `idleTimeout`：空闲连接回收阈值（毫秒）
 

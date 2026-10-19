@@ -69,7 +69,7 @@
 | `PartitionByMonth.reCalculatePartition` | 负偏移环绕存在 off-by-one 边界（`nPartition - (-t) % n` 在整除时返回 nPartition 越界） | 相同公式移植 + 结果界内断言由上层 `node_at` 兜底（越界返回明确错误而非 panic） |
 | 手写 NIO 栈与 Vert.x 栈并存（`NativeMycatServer` vs `VertxMycatServer`） | 双实现漂移 | 单一实现 |
 
-## 3. 未移植的能力（明确报错或忽略，绝不静默给错结果）
+## 3. 能力对比与未移植项（明确报错或忽略，绝不静默给错结果）
 
 | Java 版能力 | Pro 行为 | 建议 |
 |---|---|---|
@@ -86,7 +86,7 @@
 | TNS(Oracle) 前端 | 嗅探识别后明确拒绝并记录日志（Java 版为无认证 PoC：固定 root、把 DATA 包当 UTF-8 文本 SQL，无法对接真实客户端）。**可行性已评估：有条件可行**（官方 rust-oracledb 等源码公开了 TNS/TTC/O5L/O7L 全部细节），Phase 1+2 约 6–10K 行，见 [oracle-tns-feasibility.md](oracle-tns-feasibility.md) | 如需 Oracle 工具链接入，按报告路线图立项 |
 | PostgreSQL 后端（dbType=postgresql） | Java 版经 JDBC+jOOQ 支持非 MySQL 后端 | **已实现**：官方生态 tokio-postgres 客户端（SCRAM-SHA-256/MD5 认证零风险）+ 自研池 + 反引号→双引号方言翻译 + 类型映射（prepare 描述缓存）+ `select 1` 心跳；**XA 2PC 原生支持**（PREPARE TRANSACTION/COMMIT PREPARED，要求 max_prepared_transactions>0），**MySQL+PG 混合 XA 实测通过**；物理建表 DBA 手工（DDL 自动化 MySQL 专用） | 三前端协议均可查询 PG 分片表；跨 MySQL+PG+Oracle 混合分片可组合 |
 | Oracle 后端（dbType=oracle） | Java 版经 JDBC+jOOQ 方言翻译支持非 MySQL 后端 | **已实现**：官方 rust-oracledb thin 驱动 + 自研池（spawn_blocking 隔离阻塞调用）+ MySQL→Oracle 方言翻译器（标识符/LIMIT/INSERT ALL/函数/日期格式，见 commands.md）+ `select 1 from dual` 心跳；事务外语句即时 COMMIT（autocommit=true 语义）、事务固定连接 + 驱动 commit/rollback、连接归还回滚净化；Oracle 物理建表手工执行（DDL 自动化 MySQL 专用）；TDS 前端 `SELECT TOP n`→`LIMIT n` 改写 | 三前端协议均可查询 Oracle 分片表；跨 MySQL+Oracle 混合分片已实测（写入物理可见/事务/多行 INSERT/update/delete） |
-| 前端 SSL/TLS、压缩协议 | 握手期明确拒绝（MySQL ERR / PG 回 'N' / TDS ENCRYPT_NOT_SUP） | 内网部署或前置 TLS 代理 |
+| 压缩协议 / TDS 加密协商 | MySQL `CLIENT_COMPRESS` 未声明；TDS 未实现 TLS/加密 | 内网部署或前置 TLS 代理；MySQL/PostgreSQL 前端 TLS 已支持（见上） |
 | migrate 在线分片迁移 / binlog 增量同步 | 未实现 | 使用 Java 版 migrate |
 | BASELINE/SPM 执行计划管理 | `ER_NOT_SUPPORTED_YET` | – |
 | 组序列/表序列（group sequence、MySQL 表序列） | Snowflake（默认）+ 简单计数序列（START WITH/INCREMENT BY，内存态非持久） | 需要持久化组序列时用 Java 版 |

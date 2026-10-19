@@ -1,7 +1,6 @@
 # Mycat3 Pro 演示环境：1 主 1 从 MySQL + Mycat3 Pro
-# 启动: docker compose up -d
+# 启动: docker compose up -d --build
 # 连接: mysql -h 127.0.0.1 -P 8066 -uroot -p123456
-version: "3.8"
 
 services:
   mysql-master:
@@ -33,11 +32,10 @@ services:
       mysql-master:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9066/-/healthy"]
-      interval: 15s
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-pmysql_root_pw"]
+      interval: 5s
       timeout: 3s
-      start_period: 10s
-      retries: 5
+      retries: 30
     volumes:
       - ./docker/init-replica.sql:/docker-entrypoint-initdb.d/init.sql:ro
 

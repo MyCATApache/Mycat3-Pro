@@ -46,7 +46,7 @@ CI（tag 触发）见 `.github/workflows/release.yml`。
 | 广播表 | 读单节点、写全节点扇出 | `GlobalTable` |
 | 读写分离 | BALANCE_ALL / NONE / ALL_READ / READ_WRITE + 随机/权重轮询/最少活跃策略 | `replica` / `plug.loadBalance` |
 | 高可用 | 心跳（select 1 / show slave status / Galera wsrep / MGR），连续错误阈值，主从切换与节流 | `replica.heartbeat` |
-| 事务 | 本地代理事务（BEGIN/COMMIT/ROLLBACK，按数据源固定连接，autocommit=0 隐式事务） | `LocalTransactionSession` |
+| 事务 | 本地代理事务（BEGIN/COMMIT/ROLLBACK，按数据源固定连接，autocommit=0 隐式事务）；可选 MySQL/PostgreSQL XA 2PC | `LocalTransactionSession` / XA |
 | 预处理语句 | PREPARE/EXECUTE/CLOSE/SEND_LONG_DATA（单节点路由，参数文本替换 + 二进制协议回写） | `COM_STMT_*` handlers |
 | Hint | `/*!mycat:target=xx*/`、`master`/`slave`、`schema=`、`sql=` 透传 | `getHintRoute` |
 | 管理命令 | `show @@cluster` / `@@datasource` / `@@connection` / `@@heartbeat` / `@@version`、`explain`、`show databases/tables`、`show [full] processlist`、`kill <id>`、`show users` | Pro 增强（Mycat2 风格） |
@@ -94,7 +94,7 @@ server ──► sql ──► router ──► config
 
 ### 环境要求
 
-- Rust 1.75+（stable）
+- Rust stable（Dockerfile 使用 `rust:1-bookworm`）
 - 一个或多个 MySQL 5.7 / 8.0 后端（`mysql_native_password`；caching_sha2 支持快速认证路径）
 
 ### 构建
@@ -102,7 +102,7 @@ server ──► sql ──► router ──► config
 ```bash
 cd "Mycat 3 Pro"
 cargo build --release          # 产物: target/release/mycat3-pro
-cargo test --workspace         # 194 个测试
+cargo test --workspace         # 342 个测试
 ```
 
 ### 启动（本机 MySQL 演示）
@@ -139,14 +139,14 @@ docker run -d --name mycat3-pro -p 8066:8066 -p 9066:9066 \
 docker build -t mycat/mycat3-pro:latest .
 
 # 完整演示环境（MySQL 主从 + Mycat3 Pro，自动建分片库表）
-docker compose up -d
+docker compose up -d --build
 mysql -h127.0.0.1 -P8066 -uroot -p123456 -Ddb1 -e "select * from orders"
 
-# 纯代理模式示例（MySQL + 代理，拦截 DDL）
+# 纯代理模式示例（MySQL + 代理，拦截 DDL；若未拉取官方镜像先执行上面的 docker build）
 docker compose -f examples/docker/proxy.compose.yml up -d
 ```
 
-容器细节（端口/卷/TLS/后端示例/健康检查/多架构）见 [docs/docker.md](docs/docker.md)。
+容器细节（端口/卷/TLS/后端示例/健康检查/多架构/发布流程）见 [docs/docker.md](docs/docker.md)。
 
 ### 试用示例
 
@@ -198,14 +198,18 @@ conf/
 
 ## 与 Java 版的主要差异
 
-Pro 版聚焦**透传路由模式**（Java 版 `HackRouter` 快速路径的超集），以下 Java 版能力未移植，遇到时返回明确错误而非静默错误结果：
+Pro 版聚焦**透传路由模式**（Java 版 `HackRouter` 快速路径的超集）。未移植能力遇到时返回明确错误，绝不静默给出错误结果；已补齐的能力在下面单独列出：
 
+未移植：
 - Calcite 分布式执行引擎：跨分片 JOIN、GROUP BY 下推、子查询、AVG/复杂聚合（Pro 支持单分片表全 CRUD + 简单聚合归并）
-- XA 分布式事务（Pro 为本地代理事务）
 - TNS/Oracle 前端：Java 版为无认证 PoC（无法对接真实客户端），Pro 版嗅探到 TNS 流量时明确拒绝而非伪装。可行性已单独评估（2022–2026 年 Oracle 官方开源 thin 驱动使协议知识公开），结论为有条件可行，路线图见 [oracle-tns-feasibility.md](docs/oracle-tns-feasibility.md)
-- Oracle 后端（`dbType: "oracle"`）：**已实现**。官方 rust-oracledb thin 驱动 + MySQL→Oracle 方言翻译（标识符/LIMIT→ROWNUM/INSERT ALL/函数/日期格式），支持 MySQL+Oracle 混合分片、三前端接入、事务语义对齐；Oracle 物理建表由 DBA 手工执行（DDL 自动化仅 MySQL）。详见 [oracle-backend-feasibility.md](docs/oracle-backend-feasibility.md) §8 与 [commands.md](docs/commands.md)
-- SSL/TLS 前端（PG/TDS/MySQL 三协议均为明文；PG SSLRequest 回 'N'，TDS 声明 ENCRYPT_NOT_SUP）
-- 在线分片迁移（migrate）、SQL 计划基线（BASELINE/SPM）、序列自动生成填充
+- 在线分片迁移（migrate）、SQL 计划基线（BASELINE/SPM）、持久化组序列
+- MySQL 压缩协议、TDS 加密协商（MySQL/PostgreSQL 前端 TLS 已支持，见下）
+
+已实现，且与 Java 版存在差异的关键能力：
+- XA 分布式事务：**MySQL + PostgreSQL**（2PC、决策 WAL、启动 `XA RECOVER`/`pg_prepared_xacts` 恢复；Oracle thin 驱动无 XA 接口，显式拒绝）
+- Oracle 后端（`dbType: "oracle"`）：官方 rust-oracledb thin 驱动 + MySQL→Oracle 方言翻译（标识符/LIMIT→ROWNUM/INSERT ALL/函数/日期格式），支持 MySQL+Oracle 混合分片、三前端接入、事务语义对齐；Oracle 物理建表由 DBA 手工执行（DDL 自动化仅 MySQL）。详见 [oracle-backend-feasibility.md](docs/oracle-backend-feasibility.md) §8 与 [commands.md](docs/commands.md)
+- PostgreSQL 后端、纯代理模式（`server.mode=proxy`）、MySQL/PostgreSQL 前端 TLS
 
 详细清单与有意修复的 Java 版缺陷见 [docs/compatibility.md](docs/compatibility.md)。
 
@@ -214,7 +218,7 @@ Pro 版聚焦**透传路由模式**（Java 版 `HackRouter` 快速路径的超�
 ```bash
 cargo fmt --all          # 格式化
 cargo clippy --workspace # lint
-cargo test --workspace   # 测试（194 个）
+cargo test --workspace   # 测试（342 个）
 ```
 
 目录结构：
@@ -232,7 +236,7 @@ crates/
                 # 本地命令(commands)、事务(tx)、监控(monitor)、CLI (mycat3-pro)
 conf/           # 默认配置（2 数据源 + 分片/广播/单表演示）
 docker/         # compose 演示环境初始化 SQL 与容器配置
-scripts/        # 启动/停止脚本
+scripts/        # 启动/停止、Docker Hub 发布脚本
 docs/           # 文档
 tests/          # （预留）跨 crate 测试
 ```

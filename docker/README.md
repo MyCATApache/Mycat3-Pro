@@ -4,9 +4,11 @@ Mycat3 的 Rust 重新实现：一个进程同时提供 **MySQL / PostgreSQL / S
 （同端口嗅探），支持 **MySQL / PostgreSQL / Oracle** 三种后端，可选**分片路由**或**纯代理**模式。
 
 - 镜像：`mycat/mycat3-pro`（`latest`、`v0.3.0`）
-- 平台：`linux/amd64`（可用 buildx 构建 arm64）
+- 平台：`linux/amd64`、`linux/arm64`（由发布工作流构建多架构 manifest）
 - 源码与完整文档：https://github.com/MyCATApache/Mycat3-Pro
+- Dockerfile：https://github.com/MyCATApache/Mycat3-Pro/blob/main/Dockerfile
 - Docker 指南：https://github.com/MyCATApache/Mycat3-Pro/blob/main/docs/docker.md
+- 可运行示例：https://github.com/MyCATApache/Mycat3-Pro/tree/main/examples/docker
 
 ## 快速开始
 
@@ -21,6 +23,7 @@ docker run -d --name mycat3-pro \
 - `9066`：监控 HTTP（`/-/healthy`、`/metrics`、`/api/status`）
 - 配置目录：`/opt/mycat3-pro/conf`（镜像自带示例，建议挂载）
 - 非 root 运行（UID 1000），`tini` 转 SIGTERM，支持 `docker stop` 优雅停机
+- 只读挂载适合纯读配置；启用 XA 或 SQL 缓存落盘时，配置目录需可写（写入 `xa/`、`cache/sqlcache/`）
 
 连接：
 
@@ -61,7 +64,7 @@ sqlcmd -S 127.0.0.1,8066 -U root -P 123456   # 需 encrypt=false
 ```bash
 git clone https://github.com/MyCATApache/Mycat3-Pro
 cd Mycat3-Pro
-docker compose up -d
+docker compose up -d --build
 mysql -h127.0.0.1 -P8066 -uroot -p123456 -Ddb1 -e "select * from orders"
 ```
 

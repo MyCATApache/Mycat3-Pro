@@ -1,0 +1,100 @@
+name: Docker Publish
+
+# 发布 mycat/mycat3-pro 到 Docker Hub。
+# 前置条件（仓库 Settings → Secrets and variables → Actions）：
+#   DOCKERHUB_USERNAME  拥有 mycat 命名空间写权限的 Docker Hub 账号
+#   DOCKERHUB_TOKEN     Docker Hub PAT（Read & Write），不是账号密码
+# 触发方式：
+#   - 推送 v* 标签（自动发布该版本 + latest）
+#   - Actions 页面手动运行（可指定版本、是否更新 latest、平台）
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "镜像版本标签（不含 v，例如 0.3.0）"
+        required: true
+        default: "0.3.0"
+      push_latest:
+        description: "同时更新 :latest"
+        type: boolean
+        default: true
+      platforms:
+        description: "目标平台（逗号分隔）"
+        required: true
+        default: "linux/amd64,linux/arm64"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: mycat/mycat3-pro
+  PLATFORMS: ${{ github.event.inputs.platforms || 'linux/amd64,linux/arm64' }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=${{ github.event.inputs.version || '0.3.0' }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' || inputs.push_latest }}
+
+      - name: Build and push (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Update Docker Hub overview
+        env:
+          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: ./scripts/publish-dockerhub.sh --description-only
+
+      - name: Summary
+        run: |
+          {
+            echo "### Docker Hub"
+            echo
+            echo "- Image: \`${{ env.IMAGE }}\`"
+            echo "- Tags: \`${{ steps.meta.outputs.tags }}\`"
+            echo "- Platforms: \`${{ env.PLATFORMS }}\`"
+            echo
+            echo "https://hub.docker.com/r/${{ env.IMAGE }}"
+          } >> "$GITHUB_STEP_SUMMARY"
