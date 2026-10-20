@@ -923,7 +923,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "mycat3-client"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bytes",
  "mycat3-config",
@@ -937,7 +937,7 @@ dependencies = [
 
 [[package]]
 name = "mycat3-config"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64",
  "parking_lot",
@@ -952,9 +952,10 @@ dependencies = [
 
 [[package]]
 name = "mycat3-mssql"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
+ "futures-util",
  "mycat3-protocol",
  "parking_lot",
  "thiserror",
@@ -966,7 +967,7 @@ dependencies = [
 
 [[package]]
 name = "mycat3-oracle"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "mycat3-protocol",
  "oracledb",
@@ -978,7 +979,7 @@ dependencies = [
 
 [[package]]
 name = "mycat3-pgclient"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "mycat3-protocol",
  "parking_lot",
@@ -991,7 +992,7 @@ dependencies = [
 
 [[package]]
 name = "mycat3-protocol"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bytes",
  "rand 0.8.8",
@@ -1003,7 +1004,7 @@ dependencies = [
 
 [[package]]
 name = "mycat3-replica"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "mycat3-client",
  "mycat3-config",
@@ -1020,7 +1021,7 @@ dependencies = [
 
 [[package]]
 name = "mycat3-router"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
  "crc32fast",
@@ -1033,7 +1034,7 @@ dependencies = [
 
 [[package]]
 name = "mycat3-server"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1067,7 +1068,7 @@ dependencies = [
 
 [[package]]
 name = "mycat3-sql"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "mycat3-config",
  "mycat3-router",

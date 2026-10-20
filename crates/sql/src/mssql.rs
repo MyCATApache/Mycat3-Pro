@@ -367,3 +367,281 @@ mod tests {
         assert!(s.contains("','"), "{}", s);
     }
 }
+
+// ---------------------------------------------------------------------------
+// DDL translation for SQL Server physical tables
+// ---------------------------------------------------------------------------
+
+/// Convert a MySQL `CREATE TABLE` template into a T-SQL `CREATE TABLE` batch.
+///
+/// The template is Mycat's normalized physical DDL (with `__TABLE__`);
+/// `schema`/`table` are the physical SQL Server identifiers. Common MySQL
+/// types are mapped; unsupported constructs are rejected explicitly.
+pub fn translate_ddl(sql: &str, schema: &str, table: &str) -> MssqlDialectResult<String> {
+    let mut stmts =
+        Parser::parse_sql(&MySqlDialect {}, sql).map_err(|e| DialectError::Parse(e.to_string()))?;
+    if stmts.len() != 1 {
+        return Err(DialectError::Unsupported(
+            "SQL Server 物理建表只接受单条 CREATE TABLE".into(),
+        ));
+    }
+    let mut stmt = stmts.pop().unwrap();
+    let Statement::CreateTable(ct) = &mut stmt else {
+        return Err(DialectError::Unsupported(
+            "SQL Server 物理建表只支持 CREATE TABLE".into(),
+        ));
+    };
+    ct.if_not_exists = false;
+    ct.or_replace = false;
+    ct.engine = None;
+    ct.default_charset = None;
+    ct.collation = None;
+    ct.table_properties.clear();
+    ct.with_options.clear();
+    ct.auto_increment_offset = None;
+    ct.comment = None;
+    ct.partition_by = None;
+    ct.cluster_by = None;
+    ct.options = None;
+
+    for col in &mut ct.columns {
+        col.data_type = map_ddl_type(col.data_type.clone())?;
+        col.collation = None;
+        let mut keep = Vec::with_capacity(col.options.len());
+        for opt in col.options.drain(..) {
+            match &opt.option {
+                ColumnOption::OnUpdate(_) => {
+                    return Err(DialectError::Unsupported(
+                        "SQL Server 不支持 ON UPDATE 列选项".into(),
+                    ))
+                }
+                ColumnOption::CharacterSet(_) | ColumnOption::Comment(_) => {}
+                ColumnOption::Generated { .. }
+                | ColumnOption::Materialized(_)
+                | ColumnOption::Ephemeral(_)
+                | ColumnOption::Alias(_)
+                | ColumnOption::Options(_) => {
+                    return Err(DialectError::Unsupported(
+                        "SQL Server 不支持的列表达式/生成列选项".into(),
+                    ))
+                }
+                _ => keep.push(opt),
+            }
+        }
+        col.options = keep;
+    }
+    let schema_name = if schema.is_empty() { "dbo" } else { schema };
+    let mut secondary_indexes = Vec::new();
+    let mut constraints = Vec::with_capacity(ct.constraints.len());
+    for constraint in std::mem::take(&mut ct.constraints) {
+        match constraint {
+            TableConstraint::PrimaryKey {
+                name,
+                index_name,
+                index_type: _,
+                columns,
+                index_options: _,
+                characteristics: _,
+            } => constraints.push(TableConstraint::PrimaryKey {
+                name: name.or(index_name),
+                index_name: None,
+                index_type: None,
+                columns,
+                index_options: vec![],
+                characteristics: None,
+            }),
+            TableConstraint::Unique {
+                name,
+                index_name,
+                index_type_display: _,
+                index_type: _,
+                columns,
+                index_options: _,
+                characteristics: _,
+                nulls_distinct: _,
+            } => constraints.push(TableConstraint::Unique {
+                name: name.or(index_name),
+                index_name: None,
+                index_type_display: sqlparser::ast::KeyOrIndexDisplay::None,
+                index_type: None,
+                columns,
+                index_options: vec![],
+                characteristics: None,
+                nulls_distinct: sqlparser::ast::NullsDistinctOption::None,
+            }),
+            TableConstraint::ForeignKey { .. } | TableConstraint::Check { .. } => {
+                constraints.push(constraint)
+            }
+            TableConstraint::Index {
+                name,
+                columns,
+                index_type: _,
+                ..
+            } => {
+                let index_name = name.unwrap_or_else(|| {
+                    let cols = columns
+                        .iter()
+                        .map(|c| c.value.trim_matches('`'))
+                        .collect::<Vec<_>>()
+                        .join("_");
+                    let generated: String =
+                        format!("IX_{}_{}", table, cols).chars().take(128).collect();
+                    Ident::new(generated)
+                });
+                let cols = columns
+                    .iter()
+                    .map(|c| format!("{}", bracket_ident(&c.value.trim_matches('`'))))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                secondary_indexes.push(format!(
+                    "CREATE INDEX [{}] ON [{}].[{}] ({})",
+                    index_name.value.replace(']', "]]"),
+                    schema_name.replace(']', "]]"),
+                    table.replace(']', "]]"),
+                    cols
+                ));
+            }
+            TableConstraint::FulltextOrSpatial { .. } => {
+                return Err(DialectError::Unsupported(
+                    "SQL Server 物理建表不支持 FULLTEXT/SPATIAL 索引".into(),
+                ))
+            }
+        }
+    }
+    ct.constraints = constraints;
+    ct.name = ObjectName(vec![
+        bracket_ident(if schema.is_empty() { "dbo" } else { schema }),
+        bracket_ident(table),
+    ]);
+
+    let mut ddl = stmt.to_string();
+    ddl = ddl.replace("AUTO_INCREMENT", "IDENTITY(1,1)");
+    ddl = ddl.replace("BLOB", "VARBINARY(MAX)");
+    ddl = ddl.replace("UUID", "UNIQUEIDENTIFIER");
+    if !secondary_indexes.is_empty() {
+        ddl.push_str(";\n");
+        ddl.push_str(&secondary_indexes.join(";\n"));
+    }
+    // `VARBINARY` without a length is invalid on SQL Server (defaults to 1).
+    ddl = ddl.replace("VARBINARY,", "VARBINARY(MAX),");
+    ddl = ddl.replace("VARBINARY)", "VARBINARY(MAX))");
+
+    let qualified = format!(
+        "[{}].[{}]",
+        (if schema.is_empty() { "dbo" } else { schema }).replace(']', "]]"),
+        table.replace(']', "]]")
+    );
+    Ok(format!(
+        "IF OBJECT_ID(N'{}', N'U') IS NULL\nBEGIN\n{}\nEND",
+        qualified.replace('\'', "''"),
+        ddl
+    ))
+}
+
+fn bracket_ident(value: &str) -> Ident {
+    let mut id = Ident::new(value.replace(']', "]]"));
+    id.quote_style = Some('[');
+    id
+}
+
+fn char_len(len: Option<u64>) -> Option<CharacterLength> {
+    len.map(|length| CharacterLength::IntegerLength { length, unit: None })
+}
+
+fn map_ddl_type(t: DataType) -> MssqlDialectResult<DataType> {
+    use DataType::*;
+    Ok(match t {
+        TinyInt(Some(1)) => Bit(None),
+        TinyInt(_) => SmallInt(None),
+        UnsignedTinyInt(_) => TinyInt(None),
+        SmallInt(_) => SmallInt(None),
+        UnsignedSmallInt(_) => Int(None),
+        MediumInt(_) => Int(None),
+        UnsignedMediumInt(_) => BigInt(None),
+        Int(_) | Integer(_) => Int(None),
+        UnsignedInt(_) | UnsignedInteger(_) => BigInt(None),
+        BigInt(_) => BigInt(None),
+        UnsignedBigInt(_) => Decimal(ExactNumberInfo::Precision(20)),
+        Float(_) => Float(None),
+        Real => Real,
+        Double | DoublePrecision => Float(Some(53)),
+        Decimal(info) | Numeric(info) | Dec(info) => Decimal(info),
+        Datetime(_) => Datetime(None),
+        Timestamp(_, _) => Datetime(None),
+        Date => Date,
+        Time(p, _) => Time(p, TimezoneInfo::None),
+        Bool | Boolean => Bit(None),
+        Varchar(len) | Char(len) | Character(len) | CharacterVarying(len) => Nvarchar(len),
+        String(len) => Nvarchar(char_len(len)),
+        Text | TinyText | MediumText | LongText | JSON => Nvarchar(Some(CharacterLength::Max)),
+        Blob(_) | TinyBlob | MediumBlob | LongBlob | Bytea => Blob(None),
+        Binary(len) | Varbinary(len) => Varbinary(len),
+        Uuid => Uuid,
+        Enum(_, _) | Set(_) => {
+            return Err(DialectError::Unsupported(
+                "SQL Server 不支持 ENUM/SET 列（请改用 NVARCHAR + CHECK）".into(),
+            ))
+        }
+        other => {
+            return Err(DialectError::Unsupported(format!(
+                "SQL Server 物理建表暂不支持类型: {}",
+                other
+            )))
+        }
+    })
+}
+
+#[cfg(test)]
+mod ddl_tests {
+    use super::*;
+
+    #[test]
+    fn translates_basic_create_table() {
+        let sql = translate_ddl(
+            "CREATE TABLE IF NOT EXISTS __TABLE__ (id BIGINT PRIMARY KEY, name VARCHAR(64), created DATETIME, amount DECIMAL(12,2))",
+            "db1_0",
+            "orders_0",
+        )
+        .unwrap();
+        assert!(sql.contains("[db1_0].[orders_0]"), "{}", sql);
+        assert!(sql.contains("OBJECT_ID"), "{}", sql);
+        assert!(sql.contains("NVARCHAR(64)"), "{}", sql);
+        assert!(sql.contains("DECIMAL(12,2)"), "{}", sql);
+        assert!(!sql.contains("IF NOT EXISTS"), "{}", sql);
+    }
+
+    #[test]
+    fn translates_auto_increment_and_text() {
+        let sql = translate_ddl(
+            "CREATE TABLE t (id BIGINT AUTO_INCREMENT PRIMARY KEY, body TEXT, payload BLOB)",
+            "dbo",
+            "t",
+        )
+        .unwrap();
+        assert!(sql.contains("IDENTITY(1,1)"), "{}", sql);
+        assert!(sql.contains("NVARCHAR(MAX)"), "{}", sql);
+        assert!(sql.contains("VARBINARY(MAX)"), "{}", sql);
+    }
+
+    #[test]
+    fn translates_mysql_indexes_and_unique_keys() {
+        let sql = translate_ddl(
+            "CREATE TABLE t (id BIGINT PRIMARY KEY, a INT, b VARCHAR(10), UNIQUE KEY uk_a (a), KEY idx_b (b, a))",
+            "db1_0",
+            "t",
+        )
+        .unwrap();
+        assert!(sql.contains("UNIQUE (a)"), "{}", sql);
+        assert!(!sql.contains("UNIQUE KEY"), "{}", sql);
+        assert!(
+            sql.contains("CREATE INDEX [idx_b] ON [db1_0].[t] ([b], [a])"),
+            "{}",
+            sql
+        );
+    }
+
+    #[test]
+    fn rejects_enum() {
+        assert!(translate_ddl("CREATE TABLE t (s ENUM('a','b'))", "dbo", "t").is_err());
+    }
+}

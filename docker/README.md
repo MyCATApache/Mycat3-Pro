@@ -3,7 +3,7 @@
 Mycat3 的 Rust 重新实现：一个进程同时提供 **MySQL / PostgreSQL / SQL Server(TDS)** 三种前端协议
 （同端口嗅探），支持 **MySQL / PostgreSQL / Oracle / SQL Server** 四种后端，可选**分片路由**或**纯代理**模式。
 
-- 镜像：`mycat/mycat3-pro`（`latest`、`v0.3.0`）
+- 镜像：`mycat/mycat3-pro`（`latest`、`v0.3.1`）
 - 平台：`linux/amd64`、`linux/arm64`（由发布工作流构建多架构 manifest）
 - 源码与完整文档：https://github.com/MyCATApache/Mycat3-Pro
 - Dockerfile：https://github.com/MyCATApache/Mycat3-Pro/blob/main/Dockerfile

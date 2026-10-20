@@ -86,6 +86,21 @@ echo "（SQL Server 无 XA；跨分片原子性需 MSDTC/业务补偿，详见 R
 section "4. SQL Server 物理落点核对"
 "${SQLCMD[@]}" -d db1 -Q "select count(*) as dict_rows from db1_0.dict; select count(*) as orders_0 from db1_0.orders_0; select count(*) as orders_1 from db1_0.orders_1; select count(*) as orders_2 from db1_1.orders_2; select count(*) as orders_3 from db1_1.orders_3;"
 
-section "5. HTTP 状态"
+section "5. 物理 DDL 自动化（逻辑 CREATE TABLE → T-SQL 建 schema/表/索引）"
+mysql_run <<'SQL'
+drop table if exists ddl_demo;
+create table ddl_demo (
+  id bigint primary key,
+  name varchar(64) not null,
+  created datetime,
+  key idx_ddl_name (name)
+);
+insert into ddl_demo (id,name,created) values (1,'auto-ddl','2026-03-01 00:00:00');
+select * from ddl_demo;
+SQL
+"${SQLCMD[@]}" -d db1 -Q "select count(*) as ddl_table from sys.objects where object_id = OBJECT_ID(N'db1.ddl_demo') and type = 'U'; select count(*) as ddl_index from sys.indexes where object_id = OBJECT_ID(N'db1.ddl_demo') and name = 'idx_ddl_name';"
+mysql_run -e "drop table ddl_demo;"
+
+section "6. HTTP 状态"
 curl -fsS "$HTTP/api/status" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(json.dumps({k:d[k] for k in ("mode","queries","datasources")},ensure_ascii=False,indent=2))'
 echo "演示结束；清理: docker compose down -v"

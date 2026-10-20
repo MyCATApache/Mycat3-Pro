@@ -28,6 +28,11 @@ pub struct MssqlEndpoint {
     pub hostname_in_certificate: Option<String>,
     pub connect_timeout: Duration,
     pub application_name: String,
+    /// JDBC `applicationIntent=ReadOnly`: ask Always On to route this login
+    /// to a readable secondary (TDS Login7 ReadOnlyIntent flag).
+    pub read_only_intent: bool,
+    /// JDBC `multiSubnetFailover=true`: try all resolved listener addresses.
+    pub multi_subnet_failover: bool,
 }
 
 impl MssqlEndpoint {
@@ -51,6 +56,8 @@ impl MssqlEndpoint {
             cfg.hostname_in_certificate(hostname);
         }
         cfg.application_name(&self.application_name);
+        cfg.readonly(self.read_only_intent);
+        cfg.multi_subnet_failover(self.multi_subnet_failover);
         // Mycat enforces its own per-statement timeout; don't let the driver
         // silently impose a shorter/longer one. The handshake still has a bound.
         cfg.command_timeout(None);
@@ -107,6 +114,8 @@ pub fn parse_mssql_jdbc_url(url: &str, user: &str, password: &str) -> MssqlResul
     let mut hostname_in_certificate = None;
     let mut connect_timeout = Duration::from_secs(15);
     let mut application_name = "mycat3-pro".to_string();
+    let mut read_only_intent = false;
+    let mut multi_subnet_failover = false;
 
     for raw in parts {
         let raw = raw.trim();
@@ -152,12 +161,18 @@ pub fn parse_mssql_jdbc_url(url: &str, user: &str, password: &str) -> MssqlResul
                     application_name = value
                 }
             }
+            "applicationintent" => {
+                read_only_intent = value.eq_ignore_ascii_case("readonly");
+            }
+            "multisubnetfailover" => {
+                multi_subnet_failover =
+                    matches!(value.to_ascii_lowercase().as_str(), "true" | "yes" | "1")
+            }
             // Ignore benign JDBC options that do not change wire semantics.
             "sendstringparametersasunicode"
             | "responsebuffering"
             | "selectmethod"
-            | "packetsize"
-            | "multisubnetfailover" => {}
+            | "packetsize" => {}
             _ => {}
         }
     }
@@ -181,6 +196,8 @@ pub fn parse_mssql_jdbc_url(url: &str, user: &str, password: &str) -> MssqlResul
         hostname_in_certificate,
         connect_timeout,
         application_name,
+        read_only_intent,
+        multi_subnet_failover,
     })
 }
 
@@ -214,6 +231,20 @@ mod tests {
         .unwrap();
         assert_eq!(e.database, "dbx");
         assert_eq!(e.connect_timeout, Duration::from_secs(7));
+    }
+
+    #[test]
+    fn parses_always_on_options() {
+        let e = parse_mssql_jdbc_url(
+            "jdbc:sqlserver://ag-listener;databaseName=db1;applicationIntent=ReadOnly;multiSubnetFailover=true",
+            "u",
+            "p",
+        )
+        .unwrap();
+        assert!(e.read_only_intent);
+        assert!(e.multi_subnet_failover);
+        let cfg = e.config().unwrap();
+        assert!(cfg.get_multi_subnet_failover());
     }
 
     #[test]

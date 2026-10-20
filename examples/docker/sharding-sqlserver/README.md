@@ -70,7 +70,8 @@ docker compose run --rm -T sqlcmd-client \
 - **一个 datasource 连接一个 database**（本例 `db1`）；
 - `schemaName` 是 SQL Server **schema**（`db1_0`/`db1_1`），不是 database；
 - 物理 SQL 由方言层生成 `[db1_0].[orders_0]`；
-- 物理表由 `init/01-db.sql` 手工创建（SQL Server 的 DDL 自动化暂未启用，与 PG/Oracle 一致）；
+- 物理表可由 `init/01-db.sql` 预建，也可由 Mycat 的逻辑 `CREATE TABLE`
+  自动翻译为 T-SQL（自动建 schema/表/索引，幂等），`demo.sh` 第 5 节会验证；
 - 需要 SQL 认证；支持 TLS 配置：`encrypt=true|false`、`trustServerCertificate=true`；
 - 命名实例（`host\instance`）一期未支持，请使用显式端口；
 - 连接池：每个分片 `maxCon=8`，`minCon=1`，空闲 60s 回收。
@@ -166,7 +167,7 @@ NULL 保真。SQL Server `TINYINT` 是 0–255（MySQL TINY 有符号），查�
 | 分页 | LIMIT | LIMIT | ROWNUM | TOP / OFFSET FETCH |
 | 自增 | AUTO_INCREMENT | sequence | identity | IDENTITY |
 | XA | 原生 | 2PC prepared | 不支持 | **不支持（MSDTC 未实现）** |
-| DDL 自动化 | 支持 | 手工 | 手工 | 手工（一期） |
+| DDL 自动化 | 支持 | 支持 | 手工 | 支持（T-SQL，标识符/类型/索引） |
 | 认证 | 密码 | 密码 | 密码 | SQL 登录；Windows/Kerberos 未做 |
 
 ## 排障
@@ -177,7 +178,7 @@ NULL 保真。SQL Server `TINYINT` 是 0–255（MySQL TINY 有符号），查�
 | `Login failed for user 'sa'` | `MSSQL_SA_PASSWORD` 必须满足复杂度；确认容器环境一致 |
 | 证书/TLS 错误 | 自签证书用 `trustServerCertificate=true`；生产用受信证书并设 `encrypt=true` |
 | `OFFSET` 语法错误 | 检查 SQL 是否带 `ORDER BY`；方言层对无排序 offset 显式报错 |
-| `last_insert_id` 为 0 | SQL Server 无 MySQL OK 包式自增返回；一期返回 0，需要时用 `SCOPE_IDENTITY()`/`OUTPUT` |
+| `last_insert_id` 为 0 | 非自增表返回 0；自增表在同一条 INSERT 批次内读取 `SCOPE_IDENTITY()`（无额外往返） |
 | `XA 事务不支持 SQL Server` | 预期行为；SQL Server 分布式事务需 MSDTC，未实现 |
 | 物理表不存在 | 确认 `sqlserver-init` 成功执行；SQL Server 表/schema 手工创建 |
 | 命名实例连接失败 | 一期只支持 `host:port`；启用 TCP 或改用端口 |

@@ -237,14 +237,25 @@ AutoFunction 示例（`dbpartition by hash(id) tbpartition by hash(id) tbpartiti
   `trustServerCertificate=true`）；不支持 Windows/Kerberos/Entra 集成认证；
 - URL：`jdbc:sqlserver://host:1433;databaseName=db1;encrypt=true;trustServerCertificate=true`；
   一个数据源固定一个 database，`schemaName` 表示 SQL Server schema；
-- 物理表由 DBA/init SQL 手工创建（DDL 自动化暂未启用，与 PG/Oracle 一致）；
+- 物理表自动创建：逻辑 `CREATE TABLE` 会为每个物理节点生成 T-SQL
+  （`schema` 自动创建，`AUTO_INCREMENT`→`IDENTITY(1,1)`，`TEXT/BLOB`→
+  `NVARCHAR(MAX)/VARBINARY(MAX)`，`KEY`→`CREATE INDEX`，幂等
+  `IF OBJECT_ID(...) IS NULL`）；`repairPhysicalTable` 同样生效。`ENUM/SET`、
+  `ON UPDATE`、`FULLTEXT/SPATIAL` 等无法安全映射的构造显式报错；
 - 方言：`[bracket]` 标识符、`LIMIT`→`TOP`/`OFFSET … FETCH NEXT`、
   常用函数/布尔映射；upsert/REPLACE/`DELETE LIMIT`/`FOR UPDATE` 等显式报错；
 - 事务：`SET autocommit=0`→`BEGIN TRAN`、autocommit=1→`COMMIT`；
   `SAVEPOINT x`→`SAVE TRANSACTION [x]`；跨分片仍非原子；
 - **XA 不支持**（SQL Server 无 XA；MSDTC 未实现），`transactionType=xa` 分支显式拒绝；
-- `last_insert_id` 通过 `SCOPE_IDENTITY()` 尽力返回，非自增表为 0；
-- Always On listener 可作为一个 datasource 使用，但一期不做 AG 副本读路由/延迟感知。
+- `last_insert_id`：INSERT 批次内追加 `@@ROWCOUNT + SCOPE_IDENTITY()`，
+  不增加网络往返；非自增表返回 0；多行 INSERT 返回最后生成的 ID
+  （`SCOPE_IDENTITY()` 语义，MySQL 原生返回首个 ID）；
+- **Always On 读路由**：数据源 URL 支持 `applicationIntent=ReadOnly`
+  （TDS Login7 只读意图）与 `multiSubnetFailover=true`。把 AG listener 配成
+  master 数据源、把读意图 listener/只读实例配成同一集群的 `replicas`，并设置
+  `readBalanceType: BALANCE_ALL_READ`；`slaveThreshold` 会用
+  `sys.dm_hadr_database_replica_states.secondary_lag_seconds` 剔除高延迟副本
+  （无 `VIEW SERVER STATE` 权限或无 AG 时视为未知，不剔除）。
 
 ## PostgreSQL 后端说明（dbType=postgresql）
 

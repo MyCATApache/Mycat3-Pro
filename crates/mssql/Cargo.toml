@@ -11,6 +11,7 @@ mycat3-protocol = { path = "../protocol" }
 tiberius = { version = "0.13", default-features = false, features = ["tds80", "rustls"] }
 tokio.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }
+futures-util = "0.3"
 chrono.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true

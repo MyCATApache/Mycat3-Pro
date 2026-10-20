@@ -3,8 +3,8 @@
 > **实施状态（2026-10）**：已按本文方案落地 `crates/mssql`（`tiberius` 0.13 +
 > 自研连接池）、`BackendPool::Mssql`、T-SQL 方言层和 `sharding-sqlserver` Compose 示例。
 > 已支持 SQL 认证/TLS、schema 分片、广播/单表、常用类型、`TOP`/`OFFSET FETCH`、本地事务/
-> `SET autocommit`/保存点；**XA/MSDTC、Windows 认证、Always On 读路由、DDL 自动化仍未实现**。
-> 下文保留评估时的判断与估算，作为后续扩展依据。
+> `SET autocommit`/保存点；**DDL 自动化、Always On 只读意图/延迟剔除已实现**；
+> **XA/MSDTC、Windows 集成认证仍未实现**。下文保留评估时的判断与估算，作为后续扩展依据。
 >
 > 已用 SQL Server 2022 容器验证：分片/广播/单表、MySQL/PostgreSQL/TDS 三种前端、
 > DECIMAL/DATETIME2/NVARCHAR 类型、重复键 1062 映射、事务/autocommit/保存点、XA 显式拒绝。
@@ -86,7 +86,7 @@ ENVCHANGE/ERROR/INFO）、SQL 认证、类型系统、RPC（sp_executesql）、�
 - 分片表、广播表、单表的路由/读写/归并（count/sum/order/limit）；
 - MySQL/PG/TDS 三种前端都能访问 SQL Server 分片；
 - 本地事务（单数据源固定连接）、`COMMIT/ROLLBACK/SAVEPOINT`；
-- 手工物理 DDL（init SQL），`dbType: "mssql"` / `"sqlserver"`；
+- 物理 DDL：init SQL 预建，或逻辑 `CREATE TABLE` 自动翻译为 T-SQL，`dbType: "mssql"` / `"sqlserver"`；
 - 基础类型映射、常见错误映射、连接池；
 - TLS 可选（SQL Server / Azure SQL 的加密要求）；
 - `check` 校验、`show @@datasource`、`/metrics`、文档与 Docker 示例。
@@ -94,8 +94,8 @@ ENVCHANGE/ERROR/INFO）、SQL 认证、类型系统、RPC（sp_executesql）、�
 ### 明确不在一期
 
 - XA / MSDTC 分布式事务（SQL Server 没有 XA；见 §7）；
-- DDL 自动化（T-SQL 建表/分片物理表）——二期；
-- Always On 可读副本/延迟感知路由——二期或不做；
+- ~~DDL 自动化（T-SQL 建表/分片物理表）~~（已实现）；
+- ~~Always On 可读副本/延迟感知路由~~（已实现，见 §8）；
 - Windows/Kerberos 集成认证、Entra ID 认证；
 - `geography/geometry/hierarchyid/sql_variant` 的完整语义；
 - `MERGE` 自动改写、复杂 T-SQL 长尾。
@@ -209,17 +209,24 @@ MySQL 逻辑 SQL 可能来自 MySQL/PG/TDS 前端（TDS 前端的 `TOP n` 已被
 - `SELECT ... FOR UPDATE`、`LOCK IN SHARE MODE`（SQL Server 用锁提示/隔离级别，语义不同）；
 - MySQL 特有的 `ENUM`/`SET`/`UNSIGNED` DDL（二期映射或显式拒绝）。
 
-### 5.4 DDL（二期）
+### 5.4 DDL（已实现）
 
-物理建表一期手工；如果二期做自动化：
+`crates/sql/src/mssql.rs::translate_ddl` 把 Mycat 规范化的 MySQL
+`CREATE TABLE __TABLE__ (...)` 翻译为幂等 T-SQL：
 
+- 表名用 `[schema].[table]` 方括号引用，schema 不存在时先 `CREATE SCHEMA`；
 - `AUTO_INCREMENT`→`IDENTITY(1,1)`；
-- `DATETIME`→`DATETIME2`，`TEXT`→`NVARCHAR(MAX)`，`BLOB`→`VARBINARY(MAX)`；
-- `TINYINT(1)`→`BIT` 的语义权衡；
-- `UNSIGNED` 无法直接表达：升位（INT UNSIGNED→BIGINT）或拒绝；
-- `CREATE TABLE IF NOT EXISTS`→SQL Server 2016+ 的 `DROP ... IF EXISTS`/条件判断；
-- `ENGINE=InnoDB`/`CHARSET` 等 MySQL 表选项要剥离；
-- IDENTITY 列显式插入需要 `SET IDENTITY_INSERT`，与 Mycat 的序列填充/DDL 自动化交互要单独设计。
+- 整数按有/无符号升位（`TINYINT(1)`→`BIT`，`TINYINT`→`SMALLINT`，
+  `INT UNSIGNED`→`BIGINT`，`BIGINT UNSIGNED`→`DECIMAL(20)`）；
+- `DATETIME` 保留，`TEXT`→`NVARCHAR(MAX)`，`BLOB`→`VARBINARY(MAX)`，
+  `VARCHAR`→`NVARCHAR`，`UUID`→`UNIQUEIDENTIFIER`；
+- MySQL `KEY/INDEX`→独立的 `CREATE INDEX`；`UNIQUE KEY`→`UNIQUE` 约束；
+- 剥离 `ENGINE`/`CHARSET`/`COLLATE`/表注释；整批包在
+  `IF OBJECT_ID(N'…', N'U') IS NULL BEGIN … END` 中，可重复执行；
+- `ENUM/SET`、`ON UPDATE`、生成列、`FULLTEXT/SPATIAL` 显式报错；
+- `create_physical_node` 与 `repairPhysicalTable` 都走该路径（`dbType=mssql`）。
+- 已知边界：`CREATE TABLE ... LIKE`、`ALTER TABLE` 的 T-SQL 方言改写未覆盖；
+  IDENTITY 列显式插入仍需 `SET IDENTITY_INSERT`（由 DBA/业务处理）。
 
 ---
 
@@ -254,8 +261,31 @@ SQL Server 后端应走“类型化行 → 字符串行 → MySQL 文本载荷�
 - `MONEY` 4 位小数；
 - `BIT` 的 `0/1` 与 TRUE/FALSE；
 - `last_insert_id`：SQL Server 的 TDS 结果没有 MySQL OK 包的 insert id；
-  一期应返回 0，或单独 `SELECT SCOPE_IDENTITY()`/`OUTPUT INSERTED.id`；
-  不能伪造。
+  Mycat 在 INSERT 语句后追加 `SELECT CAST(@@ROWCOUNT...)`/`SCOPE_IDENTITY()`
+  同批次返回（单次往返），非自增表返回 0；多行 INSERT 返回最后生成的 ID
+  （`SCOPE_IDENTITY()` 语义，与 MySQL 的“首个 ID”不同，已在文档标注）。
+
+---
+
+### 6.1 大结果集与流式边界
+
+当前 `MssqlConnection::query_rows` 已按 `QueryItem` **增量解码**：tiberius 的
+`Row` 一到达就转成 Mycat 文本行，不再先 `into_results()` 保存全部 `Row`
+再复制一份文本行，峰值内存约减半。
+
+端到端协议级流式（读一行、写一行给客户端）尚未启用：Mycat 的
+`BackendOutcome::Rows(ResultSet)` 是归并、SQL 缓存、三种前端共用的物化模型，
+单条 SQL Server 查询可能参与跨分片归并/缓存写入。要做真正的流式，需要：
+
+1. 新增 `BackendOutcome::RowStream(BoxStream<Row>)`，保留列定义；
+2. engine 仅在“单分片、无 merge、无缓存、非事务固定连接”时返回流；
+3. MySQL/PG/TDS 前端逐行编码并分块 flush（现有 `write_result_set` 已有
+   64KB 分块 flush，可复用）；
+4. 流式结果不写 SQL 缓存（或改为旁路落盘）；
+5. 多分片 ORDER BY/聚合仍物化归并。
+
+这是跨 executor/frontend 的改动（估计 500–800 行），风险高于本阶段收益；
+当前以增量解码 + 前端 64KB 分块写作为折中。
 
 ---
 
@@ -307,9 +337,14 @@ SNAPSHOT 需数据库开启）。不能映射的显式报错，不能静默降�
   需要额外依赖/平台，PoC 单独评估）。
 - 命名实例：一期支持 `host:port`；`host\instance` 的 SQL Browser(UDP 1434)
   可放到二期。
-- Always On：把 AG listener 当作一个 datasource 即可；Mycat 的
-  `readBalanceType`/延迟感知不适用于 AG 副本，一期不要承诺读写分离；
-  listener 故障由 AG 自身切换，Mycat 表现为连接失败→重连。
+- Always On：AG listener 可作为一个 datasource；URL 增加
+  `applicationIntent=ReadOnly` 后 TDS Login7 设置只读意图，SQL Server 将登录
+  路由到可读副本；`multiSubnetFailover=true` 支持多子网 listener。
+  Mycat 侧把读意图数据源放入集群 `replicas`，用 `BALANCE_ALL_READ` 只读副本、
+  无副本时回退 master。`slaveThreshold` 由心跳查询
+  `sys.dm_hadr_database_replica_states.secondary_lag_seconds` 实现延迟剔除；
+  账号缺少 `VIEW SERVER STATE` 或非 AG 环境时视为未知（不剔除）。
+  listener 故障仍由 AG 自身切换。
 - SQL Server 连接数/内存：比 MySQL 更重，`maxCon` 从较小值（8–32/分片）起步。
 
 ---
@@ -372,9 +407,9 @@ SNAPSHOT 需数据库开启）。不能映射的显式报错，不能静默降�
 | T-SQL 分页/函数长尾 | 语义错误 | 只翻译明确规则；不支持即报错；测试驱动 |
 | 类型/编码（NVARCHAR/VARCHAR、DATETIME2、DECIMAL、GUID） | 结果错/乱码 | 类型矩阵测试；Unicode 优先；二进制显式十六进制 |
 | `SET autocommit`/隔离级别差异 | 事务语义错 | 事务层单测 + SQL Server 集成测试；显式拒绝无法映射项 |
-| last_insert_id 语义 | 客户端拿错 ID | 一期返回 0/文档；二期 `OUTPUT`/`SCOPE_IDENTITY` |
+| last_insert_id 语义 | 客户端拿错 ID | INSERT 同批次 `SCOPE_IDENTITY()`；非自增表 0（已实现） |
 | XA 被误认为可用 | 数据不一致 | 明确拒绝 SQL Server XA；文档/错误信息 |
-| Always On/只读副本 | 读到旧数据 | 一期无读写分离；AG listener 单写；二期单独设计 |
+| Always On/只读副本 | 读到旧数据 | `applicationIntent=ReadOnly` + `slaveThreshold` 延迟剔除（已实现）；权限/非 AG 环境不剔除 |
 | SQL Server  Licensing/资源 | 成本/部署 | 使用 Developer/Express 做开发；生产按实际版本；CI 资源预算 |
 | 测试环境（SQL Server 容器 2GB+、启动慢） | CI 成本 | 复用容器、测试分组、不把 SQL Server 放进默认全量测试 |
 
@@ -415,7 +450,7 @@ SNAPSHOT 需数据库开启）。不能映射的显式报错，不能静默降�
 - `crates/oracle/src/lib.rs`：类型映射/错误分类/事务固定连接
 - `crates/sql/src/{pg,oracle}.rs`：方言翻译器结构
 - `crates/server/src/tds.rs`：TDS **前端**实现（不可直接当客户端）
-- `crates/server/src/ddl.rs`：物理 DDL 的 MySQL-only 分支
+- `crates/server/src/ddl.rs`：物理 DDL 分支（MySQL + SQL Server）
 - `examples/docker/tds-frontend/`：SQL Server 作为前端的现有示例
 
 ---
@@ -437,6 +472,21 @@ SNAPSHOT 需数据库开启）。不能映射的显式报错，不能静默降�
 - 自签 TLS + `trustServerCertificate=true` 连接；
 - SQL Server 初始化脚本重复执行（Compose `up` 多次）。
 
+2026-10-20 增补（物理 DDL / last_insert_id / 延迟心跳）：
+
+- 逻辑 `CREATE TABLE ddl_demo (...)`：自动建 `db1` schema、表、`idx_ddl_name` 索引；
+- 逻辑分片 `CREATE TABLE ... DBPARTITION BY hash(id) DBPARTITIONS 2
+  TBPARTITION BY hash(id) TBPARTITIONS 2`：4 个物理表落在 `db1_0/db1_1`，
+  插入 4 行后 Mycat 查询与物理核对均为 4；
+- `AUTO_INCREMENT` → `IDENTITY(1,1)`，单行/多行 INSERT 均成功；
+- `DROP TABLE` 物理删除 SQL Server 表；
+- 删除物理表后 `/*!mycat:repairPhysicalTable*/` 能按配置重建；
+- 通过 Mycat 客户端探针验证 INSERT OK 包：单行 `affected=1, last_insert_id=1`，
+  多行 `affected=2, last_insert_id=3`（同批次读取，无额外往返）；
+- 表不存在/列不存在等 T-SQL 错误映射保持；
+- Always On：URL 解析 `/config`、Login7 只读 flags 已实现；本环境无 AG
+  listener/可读副本，未做真实 AG 故障切换测试（需 Windows 集群或外部 AG 环境）。
+
 验证中发现并修复：
 
 1. **物理初始化非幂等**：第二次 `docker compose up` 时 `CREATE TABLE` 报 2714；
@@ -450,5 +500,10 @@ SNAPSHOT 需数据库开启）。不能映射的显式报错，不能静默降�
    失败时移除重连。
 5. **连接池取连接未执行 idleTimeout**：取空闲连接时淘汰超时项。
 6. **示例脚本可执行位/重复初始化**：`demo.sh` 增加可执行位，初始化幂等。
+7. **MySQL `KEY idx(col)` 在 SQL Server 被丢弃**：翻译层改为生成独立
+   `CREATE INDEX`；`UNIQUE KEY` 转为 `UNIQUE` 约束（测试覆盖）。
+8. **`DROP TABLE` 对 SQL Server 静默跳过**：增加 mssql 物理删除分支并验证。
+9. **`LAST_INSERT_ID` 额外往返**：INSERT 批次内追加
+   `@@ROWCOUNT + SCOPE_IDENTITY()`，单次往返返回；多行取最后 ID，文档标注。
 
-结果：上述集成用例全部通过；`cargo test --workspace` 共 **357** 个测试通过。
+结果：上述集成用例全部通过；`cargo test --workspace` 共 **362** 个测试通过。

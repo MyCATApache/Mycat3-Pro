@@ -814,6 +814,9 @@ async fn create_physical_node(
     let ds_cfg = replica
         .datasource_config(&ds)
         .ok_or_else(|| EngineError::general(format!("datasource {} not found", ds)))?;
+    if ds_cfg.db_type.eq_ignore_ascii_case("mssql") {
+        return create_mssql_physical_node(&ds_cfg, node, ddl_template).await;
+    }
     let mut conn = state
         .conn_mgr
         .connect_direct(&ds_cfg)
@@ -839,6 +842,90 @@ async fn create_physical_node(
         .await
         .map_err(|e| EngineError::general(e.to_string()))?;
     conn.quit().await;
+    Ok(())
+}
+
+/// 该物理节点对应的数据源是否 SQL Server。
+fn physical_node_is_mssql(
+    state: &std::sync::Arc<ServerState>,
+    node: &mycat3_router::IndexDataNode,
+) -> bool {
+    let replica = state.replica();
+    let Some(ds) = replica.resolve(&node.target_name, true, false, false) else {
+        return false;
+    };
+    replica
+        .datasource_config(&ds)
+        .map(|c| c.db_type.eq_ignore_ascii_case("mssql"))
+        .unwrap_or(false)
+}
+
+/// SQL Server 物理删表（`DROP TABLE IF EXISTS [schema].[table]`）。
+async fn drop_mssql_physical_node(
+    state: &std::sync::Arc<ServerState>,
+    node: &mycat3_router::IndexDataNode,
+) -> Result<(), EngineError> {
+    let replica = state.replica();
+    let ds = replica
+        .resolve(&node.target_name, true, false, false)
+        .ok_or_else(|| {
+            EngineError::general(format!("no datasource for target {}", node.target_name))
+        })?;
+    let ds_cfg = replica
+        .datasource_config(&ds)
+        .ok_or_else(|| EngineError::general(format!("datasource {} not found", ds)))?;
+    let ep = mycat3_mssql::parse_mssql_jdbc_url(&ds_cfg.url, &ds_cfg.user, &ds_cfg.password)
+        .map_err(|e| EngineError::general(format!("mssql datasource: {}", e)))?;
+    let mut conn = mycat3_mssql::MssqlConnection::connect(&ep)
+        .await
+        .map_err(|e| EngineError::general(format!("mssql connect failed: {}", e)))?;
+    let schema = if node.schema_name.is_empty() {
+        "dbo"
+    } else {
+        &node.schema_name
+    };
+    let sql = format!(
+        "DROP TABLE IF EXISTS [{}].[{}]",
+        schema.replace(']', "]]"),
+        node.table_name.replace(']', "]]")
+    );
+    conn.execute_script(&sql, Some(std::time::Duration::from_secs(30)))
+        .await
+        .map_err(|e| EngineError::general(format!("mssql drop table: {}", e)))?;
+    Ok(())
+}
+
+/// SQL Server 物理建表：确保 schema 存在，把 MySQL CREATE TABLE 翻译为
+/// 幂等 T-SQL（`IF OBJECT_ID(...) IS NULL`）后执行。
+async fn create_mssql_physical_node(
+    ds_cfg: &DatasourceConfig,
+    node: &mycat3_router::IndexDataNode,
+    ddl_template: &str,
+) -> Result<(), EngineError> {
+    let ep = mycat3_mssql::parse_mssql_jdbc_url(&ds_cfg.url, &ds_cfg.user, &ds_cfg.password)
+        .map_err(|e| EngineError::general(format!("mssql datasource: {}", e)))?;
+    let mut conn = mycat3_mssql::MssqlConnection::connect(&ep)
+        .await
+        .map_err(|e| EngineError::general(format!("mssql connect failed: {}", e)))?;
+    let schema = if node.schema_name.is_empty() {
+        "dbo"
+    } else {
+        node.schema_name.as_str()
+    };
+    let schema_ident = schema.replace(']', "]]");
+    let schema_lit = schema_ident.replace('\'', "''");
+    let create_schema = format!(
+        "IF SCHEMA_ID(N'{}') IS NULL EXEC(N'CREATE SCHEMA [{}]')",
+        schema_lit, schema_ident
+    );
+    conn.execute_script(&create_schema, Some(std::time::Duration::from_secs(30)))
+        .await
+        .map_err(|e| EngineError::general(format!("mssql create schema: {}", e)))?;
+    let ddl = mycat3_sql::translate_mssql_ddl(ddl_template, schema, &node.table_name)
+        .map_err(|e| EngineError::general(format!("mssql DDL translate: {}", e)))?;
+    conn.execute_script(&ddl, Some(std::time::Duration::from_secs(60)))
+        .await
+        .map_err(|e| EngineError::general(format!("mssql create table: {}", e)))?;
     Ok(())
 }
 
@@ -1023,15 +1110,20 @@ pub async fn drop_table(
 
     // 物理删除（幂等，错误吞掉 —— Java 同）
     for node in &nodes {
-        let sql = if node.schema_name.is_empty() {
-            format!("DROP TABLE IF EXISTS `{}`", node.table_name)
+        let r = if physical_node_is_mssql(state, node) {
+            drop_mssql_physical_node(state, node).await
         } else {
-            format!(
-                "DROP TABLE IF EXISTS `{}`.`{}`",
-                node.schema_name, node.table_name
-            )
+            let sql = if node.schema_name.is_empty() {
+                format!("DROP TABLE IF EXISTS `{}`", node.table_name)
+            } else {
+                format!(
+                    "DROP TABLE IF EXISTS `{}`.`{}`",
+                    node.schema_name, node.table_name
+                )
+            };
+            execute_on_target(state, &node.target_name, &sql).await
         };
-        if let Err(e) = execute_on_target(state, &node.target_name, &sql).await {
+        if let Err(e) = r {
             tracing::warn!(node = %node.unique_name(), "physical drop failed: {}", e);
         }
     }
@@ -1706,8 +1798,10 @@ async fn repair_physical_tables(state: &std::sync::Arc<ServerState>) -> Result<(
                     Some(c) => c,
                     None => continue,
                 };
-                if !ds_cfg.db_type.eq_ignore_ascii_case("mysql") {
-                    continue; // Oracle 后端物理表由 DBA 手工管理
+                if !ds_cfg.db_type.eq_ignore_ascii_case("mysql")
+                    && !ds_cfg.db_type.eq_ignore_ascii_case("mssql")
+                {
+                    continue; // Oracle/PostgreSQL 物理表由 DBA 手工管理
                 }
                 let node = mycat3_router::IndexDataNode {
                     target_name: target,

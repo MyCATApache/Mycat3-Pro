@@ -220,6 +220,8 @@ pub struct HeartbeatDetector {
     statuses: RwLock<HashMap<String, Arc<HeartBeatStatus>>>,
     /// SQL Server 心跳复用连接（避免每 5s 重新 TLS/Login7 握手）。
     mssql_conns: tokio::sync::Mutex<HashMap<String, mycat3_mssql::MssqlConnection>>,
+    pg_conns: tokio::sync::Mutex<HashMap<String, mycat3_pgclient::PgConnection>>,
+    oracle_conns: tokio::sync::Mutex<HashMap<String, mycat3_oracle::DetachedOracleConn>>,
 }
 
 impl HeartbeatDetector {
@@ -232,6 +234,8 @@ impl HeartbeatDetector {
             conn_mgr,
             statuses: RwLock::new(HashMap::new()),
             mssql_conns: tokio::sync::Mutex::new(HashMap::new()),
+            pg_conns: tokio::sync::Mutex::new(HashMap::new()),
+            oracle_conns: tokio::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -288,7 +292,8 @@ impl HeartbeatDetector {
         is_master: bool,
         slave_threshold: u64,
     ) -> HeartbeatOutcome {
-        // Oracle 数据源：单机探活语义（select 1 from dual），无主从复制探测
+        // Oracle 数据源：单机探活语义（select 1 from dual），无主从复制探测。
+        // 复用一条心跳连接（旧实现每周期重新登录，固定开销大）。
         if cfg.db_type.eq_ignore_ascii_case("oracle") {
             let timeout = Duration::from_millis(cfg.max_connect_timeout.clamp(1000, 30_000));
             let oracle_cfg =
@@ -296,10 +301,33 @@ impl HeartbeatDetector {
                     Ok(c) => c,
                     Err(e) => return HeartbeatOutcome::Failed(e.to_string()),
                 };
-            return if mycat3_oracle::ping_direct(oracle_cfg, timeout).await {
-                HeartbeatOutcome::Healthy
-            } else {
-                HeartbeatOutcome::Failed("oracle ping failed".into())
+            let mut cache = self.oracle_conns.lock().await;
+            if let Some(conn) = cache.get_mut(&cfg.name) {
+                match tokio::time::timeout(timeout, conn.query(mycat3_oracle::ORACLE_PING_SQL))
+                    .await
+                {
+                    Ok(Ok(_)) => return HeartbeatOutcome::Healthy,
+                    _ => {
+                        cache.remove(&cfg.name);
+                    }
+                }
+            }
+            return match tokio::time::timeout(timeout, mycat3_oracle::connect_direct(oracle_cfg))
+                .await
+            {
+                Ok(Ok(mut conn)) => {
+                    match tokio::time::timeout(timeout, conn.query(mycat3_oracle::ORACLE_PING_SQL))
+                        .await
+                    {
+                        Ok(Ok(_)) => {
+                            cache.insert(cfg.name.clone(), conn);
+                            HeartbeatOutcome::Healthy
+                        }
+                        _ => HeartbeatOutcome::Failed("oracle ping failed".into()),
+                    }
+                }
+                Ok(Err(e)) => HeartbeatOutcome::Failed(e.to_string()),
+                Err(_) => HeartbeatOutcome::TimedOut,
             };
         }
         // SQL Server 数据源：单机探活语义（select 1），无 AG 复制探测
@@ -316,24 +344,41 @@ impl HeartbeatDetector {
                 Err(e) => return HeartbeatOutcome::Failed(e.to_string()),
             };
             let mut cache = self.mssql_conns.lock().await;
+            let mut lag = None;
             if let Some(conn) = cache.get_mut(&cfg.name) {
                 if conn.ping().await {
-                    return HeartbeatOutcome::Healthy;
-                }
-                cache.remove(&cfg.name);
-            }
-            return match tokio::time::timeout(timeout, mycat3_mssql::MssqlConnection::connect(&ep))
-                .await
-            {
-                Ok(Ok(mut conn)) => {
-                    if conn.ping().await {
-                        cache.insert(cfg.name.clone(), conn);
-                        HeartbeatOutcome::Healthy
-                    } else {
-                        HeartbeatOutcome::Failed("sqlserver ping failed".into())
+                    // Readable secondary: enforce slaveThreshold with the AG
+                    // redo-lag DMV. Unknown lag (permissions/primary) keeps
+                    // the replica eligible.
+                    if !is_master {
+                        lag = conn.secondary_lag_seconds().await;
                     }
+                } else {
+                    cache.remove(&cfg.name);
                 }
-                _ => HeartbeatOutcome::Failed("sqlserver connect failed".into()),
+            }
+            if !cache.contains_key(&cfg.name) {
+                match tokio::time::timeout(timeout, mycat3_mssql::MssqlConnection::connect(&ep))
+                    .await
+                {
+                    Ok(Ok(mut conn)) => {
+                        if conn.ping().await {
+                            if !is_master {
+                                lag = conn.secondary_lag_seconds().await;
+                            }
+                            cache.insert(cfg.name.clone(), conn);
+                        } else {
+                            return HeartbeatOutcome::Failed("sqlserver ping failed".into());
+                        }
+                    }
+                    _ => return HeartbeatOutcome::Failed("sqlserver connect failed".into()),
+                }
+            }
+            return match lag {
+                Some(seconds) if seconds > slave_threshold => {
+                    HeartbeatOutcome::SlaveBehind { seconds }
+                }
+                _ => HeartbeatOutcome::Healthy,
             };
         }
         // PostgreSQL 数据源：单机探活语义（select 1），无主从复制探测
@@ -346,11 +391,19 @@ impl HeartbeatDetector {
                 Ok(e) => e,
                 Err(e) => return HeartbeatOutcome::Failed(e.to_string()),
             };
+            let mut cache = self.pg_conns.lock().await;
+            if let Some(conn) = cache.get_mut(&cfg.name) {
+                if conn.ping().await {
+                    return HeartbeatOutcome::Healthy;
+                }
+                cache.remove(&cfg.name);
+            }
             return match tokio::time::timeout(timeout, mycat3_pgclient::PgConnection::connect(&ep))
                 .await
             {
                 Ok(Ok(mut conn)) => {
-                    if conn.query("select 1").await.is_ok() {
+                    if conn.ping().await {
+                        cache.insert(cfg.name.clone(), conn);
                         HeartbeatOutcome::Healthy
                     } else {
                         HeartbeatOutcome::Failed("postgres ping failed".into())

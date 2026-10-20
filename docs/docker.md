@@ -3,7 +3,7 @@
 官方镜像：**`mycat/mycat3-pro`**（Docker Hub）。同一镜像包含分片模式与纯代理模式，
 由 `server.json` 的 `mode` 决定，无需不同镜像。
 
-- 标签：`latest`（最新构建）、`v0.3.0` 与 `0.3.0`（版本快照，同 digest）
+- 标签：`latest`（最新构建）、`v0.3.1` 与 `0.3.1`（版本快照，同 digest）；`v0.3.0` 为不含 SQL Server 后端的旧版
 - 架构：`linux/amd64`（本地构建）；GitHub Actions 发布工作流同时构建 `linux/arm64`
 - 端口：`8066`（MySQL / PostgreSQL / TDS 三协议同端口）、`9066`（监控 HTTP）
 - 配置目录：`/opt/mycat3-pro/conf`（镜像内已带示例配置，建议挂载覆盖）
@@ -195,10 +195,12 @@ Oracle 物理表需由 DBA 手工创建；Oracle 后端不支持 XA（thin 驱�
 ```
 
 - `schemaName` 表示 SQL Server schema（一个 datasource 固定一个 database）；
-- 物理表由 DBA/init SQL 手工创建；
+- 逻辑 `CREATE TABLE` 自动翻译为 T-SQL 并创建 schema/物理表/索引；
+  初始化 SQL 仍可用于预建表或复杂对象（视图/存储过程）；
 - 支持 SQL 认证、TLS、`TOP`/`OFFSET FETCH`、本地事务；
 - **无 XA/MSDTC**；`transactionType=xa` 显式拒绝；
-- Windows 集成认证/Always On 副本读路由未实现；
+- Windows 集成认证未实现；Always On 支持 `applicationIntent=ReadOnly`、
+  `multiSubnetFailover` 与 `BALANCE_ALL_READ` + `slaveThreshold` 延迟剔除；
 - 完整示例：[`examples/docker/sharding-sqlserver`](../examples/docker/sharding-sqlserver/README.md)。
 
 ## 前端 TLS
@@ -231,12 +233,12 @@ HEALTHCHECK CMD curl -fsS http://127.0.0.1:9066/-/healthy || exit 1
 
 ```bash
 # 本机架构
-docker build -t mycat/mycat3-pro:latest -t mycat/mycat3-pro:v0.3.0 -t mycat/mycat3-pro:0.3.0 .
+docker build -t mycat/mycat3-pro:latest -t mycat/mycat3-pro:v0.3.1 -t mycat/mycat3-pro:0.3.1 .
 
 # 多架构（需 QEMU/binfmt）
 docker buildx build --platform linux/amd64,linux/arm64 \
-  --build-arg VERSION=0.3.0 \
-  -t mycat/mycat3-pro:latest -t mycat/mycat3-pro:v0.3.0 -t mycat/mycat3-pro:0.3.0 --push .
+  --build-arg VERSION=0.3.1 \
+  -t mycat/mycat3-pro:latest -t mycat/mycat3-pro:v0.3.1 -t mycat/mycat3-pro:0.3.1 --push .
 ```
 
 `.dockerignore` 已排除 `target/`（20GB 构建产物）与本地测试环境，构建上下文很小。
@@ -250,7 +252,7 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 
 ```bash
 # 1. 先本地构建（或直接使用已有的 mycat/mycat3-pro:latest）
-docker build -t mycat/mycat3-pro:latest -t mycat/mycat3-pro:v0.3.0 -t mycat/mycat3-pro:0.3.0 .
+docker build -t mycat/mycat3-pro:latest -t mycat/mycat3-pro:v0.3.1 -t mycat/mycat3-pro:0.3.1 .
 
 # 2. 预演：只打印计划，不登录、不推送
 ./scripts/publish-dockerhub.sh --dry-run
@@ -260,7 +262,7 @@ DOCKERHUB_USER=<账号> DOCKERHUB_TOKEN=<PAT> ./scripts/publish-dockerhub.sh
 ```
 
 - `DOCKERHUB_TOKEN` 使用 Docker Hub **Personal Access Token**（Read & Write），不要用账号密码。
-- 脚本先推 `v0.3.0`、`0.3.0`，再推 `latest`；成功后用 `docker/README.md` 更新 Hub 仓库简介。
+- 脚本先推 `v0.3.1`、`0.3.1`，再推 `latest`；成功后用 `docker/README.md` 更新 Hub 仓库简介。
 - 未设置 `DOCKERHUB_*` 时沿用本机 `docker login` 凭据，但会跳过简介更新；
   也可单独运行 `... --description-only` 更新简介。
 - 只推本地单架构镜像会覆盖同名多架构 manifest；需要 arm64 时用
@@ -292,7 +294,7 @@ DOCKERHUB_USER=<账号> DOCKERHUB_TOKEN=<PAT> ./scripts/publish-dockerhub.sh
 ### 补标签（不重新构建）
 
 已有镜像需要补版本别名时，运行 `.github/workflows/docker-retag.yml`：
-`source=0.3.0`、`target=v0.3.0`。工作流用 `docker buildx imagetools create`
+`source=0.3.1`、`target=v0.3.1`。工作流用 `docker buildx imagetools create`
 复制 manifest list，不会重新编译；最后会 inspect 源标签、目标标签和 `latest`，
 确认多架构平台列表。
 

@@ -9,8 +9,9 @@
 use std::time::Duration;
 
 use chrono::{FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike};
+use futures_util::TryStreamExt;
 use mycat3_protocol::consts::field_type;
-use tiberius::{Client, ColumnData, ColumnType, Config, EncryptionLevel, Row};
+use tiberius::{Client, ColumnData, ColumnType, Config, EncryptionLevel, QueryItem, Row};
 use tokio::net::TcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 use tracing::debug;
@@ -161,17 +162,21 @@ impl MssqlConnection {
 
         if is_row_query(trimmed) {
             self.query_rows(trimmed, timeout).await
-        } else {
-            let insert = is_insert(trimmed);
-            let affected = self.execute_simple(trimmed, timeout).await?;
-            let last_insert_id = if insert && !contains_output(trimmed) && affected > 0 {
-                self.scope_identity(timeout).await.unwrap_or(0)
-            } else {
-                0
-            };
+        } else if is_insert(trimmed) && !contains_output(trimmed) {
+            // Append the identity read to the INSERT batch: one round trip
+            // instead of INSERT + SELECT SCOPE_IDENTITY(). `@@ROWCOUNT` is
+            // evaluated before the SELECT itself changes it.
+            let (affected, last_insert_id) =
+                self.execute_insert_with_identity(trimmed, timeout).await?;
             Ok(MssqlOutcome::Ok {
                 affected_rows: affected,
                 last_insert_id,
+            })
+        } else {
+            let affected = self.execute_simple(trimmed, timeout).await?;
+            Ok(MssqlOutcome::Ok {
+                affected_rows: affected,
+                last_insert_id: 0,
             })
         }
     }
@@ -222,6 +227,17 @@ impl MssqlConnection {
         }
         self.execute_batch(trimmed, timeout).await?;
         Ok(())
+    }
+
+    /// Execute a SQL Server batch verbatim (DDL / multi-statement scripts).
+    /// Used by DDL automation; unlike `query`, it never applies MySQL→T-SQL
+    /// translation (the caller has already produced T-SQL).
+    pub async fn execute_script(
+        &mut self,
+        sql: &str,
+        timeout: Option<Duration>,
+    ) -> MssqlResult<()> {
+        self.execute_batch(sql, timeout).await
     }
 
     /// Begin/commit/rollback/savepoint translation.
@@ -366,30 +382,33 @@ impl MssqlConnection {
         let client = &mut self.client;
         let fut = async {
             let mut stream = client.simple_query(sql).await.map_err(tiberius_err)?;
-            let columns = stream
-                .columns()
-                .await
-                .map_err(tiberius_err)?
-                .map(|c| c.to_vec())
-                .unwrap_or_default();
-            let results = stream.into_results().await.map_err(tiberius_err)?;
-            let rows = results.into_iter().next().unwrap_or_default();
-            if columns.is_empty() {
+            // Decode each row as it arrives instead of `into_results()`: that
+            // would keep all tiberius `Row` values alive while the text-row
+            // copy is built, doubling peak memory for large result sets.
+            let mut cols: Vec<MssqlColumn> = Vec::new();
+            let mut out = Vec::new();
+            while let Some(item) = stream.try_next().await.map_err(tiberius_err)? {
+                match item {
+                    QueryItem::Metadata(meta) => {
+                        if cols.is_empty() {
+                            cols = meta
+                                .columns()
+                                .iter()
+                                .map(|c| MssqlColumn {
+                                    name: c.name().to_string(),
+                                    mysql_type: map_column_type(c.column_type()),
+                                })
+                                .collect();
+                        }
+                    }
+                    QueryItem::Row(row) => out.push(render_row(&row)?),
+                }
+            }
+            if cols.is_empty() {
                 return Ok(MssqlOutcome::Ok {
                     affected_rows: 0,
                     last_insert_id: 0,
                 });
-            }
-            let cols: Vec<MssqlColumn> = columns
-                .iter()
-                .map(|c| MssqlColumn {
-                    name: c.name().to_string(),
-                    mysql_type: map_column_type(c.column_type()),
-                })
-                .collect();
-            let mut out = Vec::with_capacity(rows.len());
-            for row in rows {
-                out.push(render_row(&row)?);
             }
             Ok(MssqlOutcome::Rows {
                 columns: cols,
@@ -405,6 +424,72 @@ impl MssqlConnection {
         }
     }
 
+    /// Execute an INSERT and read `@@ROWCOUNT` + `SCOPE_IDENTITY()` from the
+    /// same TDS batch. The trailing SELECT is part of the same round trip, so
+    /// the identity lookup adds no extra network latency.
+    async fn execute_insert_with_identity(
+        &mut self,
+        sql: &str,
+        timeout: Option<Duration>,
+    ) -> MssqlResult<(u64, u64)> {
+        let batch = format!(
+            "{};\nSELECT CAST(@@ROWCOUNT AS BIGINT) AS __mycat_affected, CAST(SCOPE_IDENTITY() AS BIGINT) AS __mycat_identity",
+            sql.trim().trim_end_matches(';')
+        );
+        let client = &mut self.client;
+        let fut = async {
+            let stream = client.simple_query(&batch).await.map_err(tiberius_err)?;
+            let results = stream.into_results().await.map_err(tiberius_err)?;
+            // The last result set is our SELECT, after any trigger results.
+            let row = results
+                .into_iter()
+                .rev()
+                .find_map(|rows| rows.into_iter().next());
+            let (affected, identity) = match row {
+                Some(row) => (
+                    row.get::<i64, _>(0).unwrap_or(0).max(0) as u64,
+                    row.get::<i64, _>(1)
+                        .and_then(|n| u64::try_from(n).ok())
+                        .unwrap_or(0),
+                ),
+                None => (0, 0),
+            };
+            Ok::<(u64, u64), MssqlError>((affected, identity))
+        };
+        match timeout {
+            Some(t) => match tokio::time::timeout(t, fut).await {
+                Ok(r) => r,
+                Err(_) => Err(MssqlError::Timeout(sql.to_string())),
+            },
+            None => fut.await,
+        }
+    }
+
+    /// Secondary redo lag for an Always On readable secondary (seconds).
+    ///
+    /// Returns `None` when the server is a primary, has no AG database, or the
+    /// account lacks `VIEW SERVER STATE`; callers treat that as "unknown" and
+    /// keep the replica eligible rather than removing it from the read pool.
+    pub async fn secondary_lag_seconds(&mut self) -> Option<u64> {
+        let sql = "SELECT ISNULL(MAX(secondary_lag_seconds), 0) AS lag_seconds \
+                   FROM sys.dm_hadr_database_replica_states \
+                   WHERE is_local = 1 AND is_primary_replica = 0";
+        let outcome = self
+            .query_rows(sql, Some(Duration::from_secs(5)))
+            .await
+            .ok()?;
+        let MssqlOutcome::Rows { rows, .. } = outcome else {
+            return None;
+        };
+        rows.first()?
+            .first()?
+            .as_deref()?
+            .parse::<i64>()
+            .ok()
+            .and_then(|n| u64::try_from(n).ok())
+    }
+
+    #[allow(dead_code)]
     async fn scope_identity(&mut self, timeout: Option<Duration>) -> Option<u64> {
         let client = &mut self.client;
         let fut = async {
