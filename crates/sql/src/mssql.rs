@@ -516,8 +516,6 @@ pub fn translate_ddl(sql: &str, schema: &str, table: &str) -> MssqlDialectResult
 
     let mut ddl = stmt.to_string();
     ddl = ddl.replace("AUTO_INCREMENT", "IDENTITY(1,1)");
-    ddl = ddl.replace("BLOB", "VARBINARY(MAX)");
-    ddl = ddl.replace("UUID", "UNIQUEIDENTIFIER");
     if !secondary_indexes.is_empty() {
         ddl.push_str(";\n");
         ddl.push_str(&secondary_indexes.join(";\n"));
@@ -574,9 +572,11 @@ fn map_ddl_type(t: DataType) -> MssqlDialectResult<DataType> {
         Varchar(len) | Char(len) | Character(len) | CharacterVarying(len) => Nvarchar(len),
         String(len) => Nvarchar(char_len(len)),
         Text | TinyText | MediumText | LongText | JSON => Nvarchar(Some(CharacterLength::Max)),
-        Blob(_) | TinyBlob | MediumBlob | LongBlob | Bytea => Blob(None),
+        Blob(_) | TinyBlob | MediumBlob | LongBlob | Bytea => {
+            Custom(ObjectName(vec![Ident::new("VARBINARY(MAX)")]), vec![])
+        }
         Binary(len) | Varbinary(len) => Varbinary(len),
-        Uuid => Uuid,
+        Uuid => Custom(ObjectName(vec![Ident::new("UNIQUEIDENTIFIER")]), vec![]),
         Enum(_, _) | Set(_) => {
             return Err(DialectError::Unsupported(
                 "SQL Server 不支持 ENUM/SET 列（请改用 NVARCHAR + CHECK）".into(),

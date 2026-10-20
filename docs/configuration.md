@@ -256,6 +256,35 @@ AutoFunction 示例（`dbpartition by hash(id) tbpartition by hash(id) tbpartiti
   `readBalanceType: BALANCE_ALL_READ`；`slaveThreshold` 会用
   `sys.dm_hadr_database_replica_states.secondary_lag_seconds` 剔除高延迟副本
   （无 `VIEW SERVER STATE` 权限或无 AG 时视为未知，不剔除）。
+- Always On 配置示例（同一个 AG listener、两个登录意图）：
+
+`datasources/ds_primary.datasource.json`：
+
+```json
+{ "name": "ds_primary", "dbType": "mssql",
+  "url": "jdbc:sqlserver://ag-listener:1433;databaseName=db1;encrypt=true;trustServerCertificate=true",
+  "user": "mycat", "password": "***" }
+```
+
+`datasources/ds_readonly.datasource.json`：
+
+```json
+{ "name": "ds_readonly", "dbType": "mssql",
+  "url": "jdbc:sqlserver://ag-listener:1433;databaseName=db1;encrypt=true;trustServerCertificate=true;applicationIntent=ReadOnly;multiSubnetFailover=true",
+  "user": "mycat", "password": "***" }
+```
+
+`clusters/c0.cluster.json`：
+
+```json
+{ "name": "c0", "clusterType": "SINGLE_NODE",
+  "masters": ["ds_primary"], "replicas": ["ds_readonly"],
+  "readBalanceType": "BALANCE_ALL_READ",
+  "heartbeat": { "maxRetry": 3, "heartbeatTimeout": 1000, "slaveThreshold": 5 } }
+```
+
+写路由固定 `masters[0]`；读路由走只读副本，副本不可用/延迟超阈值时回退主库。
+
 
 ## PostgreSQL 后端说明（dbType=postgresql）
 

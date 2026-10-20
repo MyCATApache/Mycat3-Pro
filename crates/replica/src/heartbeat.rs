@@ -351,7 +351,7 @@ impl HeartbeatDetector {
                     // redo-lag DMV. Unknown lag (permissions/primary) keeps
                     // the replica eligible.
                     if !is_master {
-                        lag = conn.secondary_lag_seconds().await;
+                        lag = conn.secondary_lag_seconds(timeout).await;
                     }
                 } else {
                     cache.remove(&cfg.name);
@@ -364,7 +364,7 @@ impl HeartbeatDetector {
                     Ok(Ok(mut conn)) => {
                         if conn.ping().await {
                             if !is_master {
-                                lag = conn.secondary_lag_seconds().await;
+                                lag = conn.secondary_lag_seconds(timeout).await;
                             }
                             cache.insert(cfg.name.clone(), conn);
                         } else {

@@ -387,10 +387,12 @@ impl MssqlConnection {
             // copy is built, doubling peak memory for large result sets.
             let mut cols: Vec<MssqlColumn> = Vec::new();
             let mut out = Vec::new();
+            let mut result_sets = 0usize;
             while let Some(item) = stream.try_next().await.map_err(tiberius_err)? {
                 match item {
                     QueryItem::Metadata(meta) => {
-                        if cols.is_empty() {
+                        result_sets += 1;
+                        if result_sets == 1 {
                             cols = meta
                                 .columns()
                                 .iter()
@@ -401,7 +403,10 @@ impl MssqlConnection {
                                 .collect();
                         }
                     }
-                    QueryItem::Row(row) => out.push(render_row(&row)?),
+                    // Match the old `into_results().next()` semantics: the
+                    // frontends only consume the first result set.
+                    QueryItem::Row(row) if result_sets <= 1 => out.push(render_row(&row)?),
+                    QueryItem::Row(_) => {}
                 }
             }
             if cols.is_empty() {
@@ -470,14 +475,11 @@ impl MssqlConnection {
     /// Returns `None` when the server is a primary, has no AG database, or the
     /// account lacks `VIEW SERVER STATE`; callers treat that as "unknown" and
     /// keep the replica eligible rather than removing it from the read pool.
-    pub async fn secondary_lag_seconds(&mut self) -> Option<u64> {
+    pub async fn secondary_lag_seconds(&mut self, timeout: Duration) -> Option<u64> {
         let sql = "SELECT ISNULL(MAX(secondary_lag_seconds), 0) AS lag_seconds \
                    FROM sys.dm_hadr_database_replica_states \
                    WHERE is_local = 1 AND is_primary_replica = 0";
-        let outcome = self
-            .query_rows(sql, Some(Duration::from_secs(5)))
-            .await
-            .ok()?;
+        let outcome = self.query_rows(sql, Some(timeout)).await.ok()?;
         let MssqlOutcome::Rows { rows, .. } = outcome else {
             return None;
         };

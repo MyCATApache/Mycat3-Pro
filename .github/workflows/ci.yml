@@ -43,6 +43,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: Make demo config writable by container UID 1000
+        run: sudo chown -R 1000:1000 examples/docker/sharding-sqlserver/conf
       - name: Start SQL Server sharding demo
         working-directory: examples/docker/sharding-sqlserver
         run: docker compose up -d --build --wait
