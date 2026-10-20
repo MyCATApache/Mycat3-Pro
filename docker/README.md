@@ -11,7 +11,7 @@ Mycat3 的 Rust 重新实现：一个进程同时提供 **MySQL / PostgreSQL / S
 - 可运行示例：https://github.com/MyCATApache/Mycat3-Pro/tree/main/examples/docker
 - SQL Server 后端说明：https://github.com/MyCATApache/Mycat3-Pro/tree/main/examples/docker/sharding-sqlserver
 
-> SQL Server 后端需使用包含 `dbType=mssql` 的新镜像；旧版 `latest` 可先按源码重建。
+> `v0.3.1`/`latest` 起内置 SQL Server 后端（`dbType=mssql`）；`v0.3.0` 及更早镜像不含该功能。
 
 ## 快速开始
 
