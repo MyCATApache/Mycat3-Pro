@@ -65,6 +65,8 @@ docker run --rm -v "$PWD/conf:/opt/mycat3-pro/conf:ro" mycat/mycat3-pro:latest c
 | [`performance`](../examples/docker/performance/README.md) | 线程/超时/连接池/缓存参数实验 |
 | [`README`](../examples/docker/README.md) | 端口、凭据、运行方式与 SQL Server 后端边界 |
 
+一键校验/运行示例：`./scripts/demo-smoke.sh check`、`./scripts/demo-smoke.sh run <示例名>`。
+
 全部示例默认使用 `mycat/mycat3-pro:latest`。SQL Server 既可作为**前端 TDS 协议**接入，
 也已作为**后端**（`dbType: "mssql"`）实现；TDS 前端示例与 SQL Server 后端示例是不同方向。
 

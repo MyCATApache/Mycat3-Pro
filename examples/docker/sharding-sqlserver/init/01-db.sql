@@ -11,60 +11,96 @@ IF SCHEMA_ID(N'db1_1') IS NULL
     EXEC(N'CREATE SCHEMA db1_1');
 GO
 
-CREATE TABLE db1_0.orders_0 (
+IF OBJECT_ID(N'db1_0.orders_0', N'U') IS NULL
+BEGIN
+    CREATE TABLE db1_0.orders_0 (
     id BIGINT PRIMARY KEY,
     user_id BIGINT NOT NULL,
     amount DECIMAL(12,2) NOT NULL,
     status NVARCHAR(16) NOT NULL,
     created DATETIME2 NOT NULL
-);
-CREATE TABLE db1_0.orders_1 (
+    );
+END;
+GO
+IF OBJECT_ID(N'db1_0.orders_1', N'U') IS NULL
+BEGIN
+    CREATE TABLE db1_0.orders_1 (
     id BIGINT PRIMARY KEY,
     user_id BIGINT NOT NULL,
     amount DECIMAL(12,2) NOT NULL,
     status NVARCHAR(16) NOT NULL,
     created DATETIME2 NOT NULL
-);
-CREATE TABLE db1_1.orders_2 (
+    );
+END;
+GO
+IF OBJECT_ID(N'db1_1.orders_2', N'U') IS NULL
+BEGIN
+    CREATE TABLE db1_1.orders_2 (
     id BIGINT PRIMARY KEY,
     user_id BIGINT NOT NULL,
     amount DECIMAL(12,2) NOT NULL,
     status NVARCHAR(16) NOT NULL,
     created DATETIME2 NOT NULL
-);
-CREATE TABLE db1_1.orders_3 (
+    );
+END;
+GO
+IF OBJECT_ID(N'db1_1.orders_3', N'U') IS NULL
+BEGIN
+    CREATE TABLE db1_1.orders_3 (
     id BIGINT PRIMARY KEY,
     user_id BIGINT NOT NULL,
     amount DECIMAL(12,2) NOT NULL,
     status NVARCHAR(16) NOT NULL,
     created DATETIME2 NOT NULL
-);
+    );
+END;
+GO
 
-CREATE TABLE db1_0.tenant_order_0 (
+IF OBJECT_ID(N'db1_0.tenant_order_0', N'U') IS NULL
+BEGIN
+    CREATE TABLE db1_0.tenant_order_0 (
     id BIGINT PRIMARY KEY,
     tenant_id NVARCHAR(32) NOT NULL,
     note NVARCHAR(128) NOT NULL,
     created DATETIME2 NOT NULL
-);
-CREATE TABLE db1_1.tenant_order_1 (
+    );
+END;
+GO
+IF OBJECT_ID(N'db1_1.tenant_order_1', N'U') IS NULL
+BEGIN
+    CREATE TABLE db1_1.tenant_order_1 (
     id BIGINT PRIMARY KEY,
     tenant_id NVARCHAR(32) NOT NULL,
     note NVARCHAR(128) NOT NULL,
     created DATETIME2 NOT NULL
-);
+    );
+END;
+GO
 
-CREATE TABLE db1_0.dict (
+IF OBJECT_ID(N'db1_0.dict', N'U') IS NULL
+BEGIN
+    CREATE TABLE db1_0.dict (
     id BIGINT PRIMARY KEY,
     name NVARCHAR(64) NOT NULL
-);
-CREATE TABLE db1_1.dict (
+    );
+END;
+GO
+IF OBJECT_ID(N'db1_1.dict', N'U') IS NULL
+BEGIN
+    CREATE TABLE db1_1.dict (
     id BIGINT PRIMARY KEY,
     name NVARCHAR(64) NOT NULL
-);
+    );
+END;
+GO
 
-CREATE TABLE db1_0.user_info (
+IF OBJECT_ID(N'db1_0.user_info', N'U') IS NULL
+BEGIN
+    CREATE TABLE db1_0.user_info (
     id BIGINT PRIMARY KEY,
     name NVARCHAR(64) NOT NULL,
     profile NVARCHAR(255) NOT NULL
-);
+    );
+END;
+GO
 GO

@@ -259,7 +259,7 @@ crates/
 conf/           # 默认配置（2 数据源 + 分片/广播/单表演示）
 docker/         # compose 演示环境初始化 SQL 与容器配置
 examples/       # Docker Compose 示例库（代理、MySQL/PG/Oracle/SQLServer 分片、性能）
-scripts/        # 启动/停止、Docker Hub 发布脚本
+scripts/        # 启动/停止、示例校验/运行、Docker Hub 发布脚本
 docs/           # 文档
 tests/          # （预留）跨 crate 测试
 ```

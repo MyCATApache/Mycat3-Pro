@@ -54,7 +54,21 @@ docker build -t mycat/mycat3-pro:latest .
 
 ## 运行方式
 
-每个示例目录都有 `README.md`，一般流程：
+快速校验全部 7 组示例（compose + 配置 + 脚本）：
+
+```bash
+./scripts/demo-smoke.sh check
+```
+
+一键启动并运行一个示例（完成后自动停止；加 `--keep` 保留）：
+
+```bash
+./scripts/demo-smoke.sh run proxy-mysql
+./scripts/demo-smoke.sh run sharding-sqlserver --keep
+./scripts/demo-smoke.sh list
+```
+
+每个示例目录也都有 `README.md`，一般流程：
 
 ```bash
 cd examples/docker/<示例>

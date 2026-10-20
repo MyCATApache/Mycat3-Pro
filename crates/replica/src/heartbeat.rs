@@ -218,6 +218,8 @@ pub struct HeartbeatDetector {
     runtime: Arc<ReplicaSelectorRuntime>,
     conn_mgr: Arc<ConnectionManager>,
     statuses: RwLock<HashMap<String, Arc<HeartBeatStatus>>>,
+    /// SQL Server 心跳复用连接（避免每 5s 重新 TLS/Login7 握手）。
+    mssql_conns: tokio::sync::Mutex<HashMap<String, mycat3_mssql::MssqlConnection>>,
 }
 
 impl HeartbeatDetector {
@@ -229,6 +231,7 @@ impl HeartbeatDetector {
             runtime,
             conn_mgr,
             statuses: RwLock::new(HashMap::new()),
+            mssql_conns: tokio::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -312,11 +315,19 @@ impl HeartbeatDetector {
                 }
                 Err(e) => return HeartbeatOutcome::Failed(e.to_string()),
             };
+            let mut cache = self.mssql_conns.lock().await;
+            if let Some(conn) = cache.get_mut(&cfg.name) {
+                if conn.ping().await {
+                    return HeartbeatOutcome::Healthy;
+                }
+                cache.remove(&cfg.name);
+            }
             return match tokio::time::timeout(timeout, mycat3_mssql::MssqlConnection::connect(&ep))
                 .await
             {
                 Ok(Ok(mut conn)) => {
                     if conn.ping().await {
+                        cache.insert(cfg.name.clone(), conn);
                         HeartbeatOutcome::Healthy
                     } else {
                         HeartbeatOutcome::Failed("sqlserver ping failed".into())

@@ -101,30 +101,31 @@ impl MssqlPool {
             .acquire_owned()
             .await
             .map_err(|_| MssqlError::Conn("SQL Server pool closed".into()))?;
-        let candidate = {
-            let mut idle = self.idle.lock();
-            idle.pop()
-                .map(|c| (c.conn, c.returned_at.elapsed() < PING_AFTER_IDLE))
-        };
-        let mut candidate = candidate;
         loop {
-            if let Some((mut conn, fresh)) = candidate {
-                if fresh || conn.ping().await {
-                    return Ok(CheckedOutMssqlConn {
-                        conn: Some(conn),
-                        pool: self.clone(),
-                        _permit: permit,
-                        broken: false,
-                    });
+            let candidate = {
+                let mut idle = self.idle.lock();
+                let now = Instant::now();
+                let mut candidate = None;
+                while let Some(c) = idle.pop() {
+                    if now.duration_since(c.returned_at) > self.idle_timeout {
+                        continue; // expired; drop and try the next idle connection
+                    }
+                    candidate = Some((c.conn, c.returned_at.elapsed() < PING_AFTER_IDLE));
+                    break;
                 }
-                candidate = self
-                    .idle
-                    .lock()
-                    .pop()
-                    .map(|c| (c.conn, c.returned_at.elapsed() < PING_AFTER_IDLE));
-                continue;
+                candidate
+            };
+            let Some((mut conn, fresh)) = candidate else {
+                break;
+            };
+            if fresh || conn.ping().await {
+                return Ok(CheckedOutMssqlConn {
+                    conn: Some(conn),
+                    pool: self.clone(),
+                    _permit: permit,
+                    broken: false,
+                });
             }
-            break;
         }
 
         let mut conn = MssqlConnection::connect(&self.endpoint).await?;
@@ -155,22 +156,11 @@ impl MssqlPool {
 
     /// (idle, available permits, created connections)
     pub fn snapshot(&self) -> (usize, usize, u64) {
-        // Remove expired idle entries lazily outside the lock.
-        let mut expired = Vec::new();
-        {
-            let mut idle = self.idle.lock();
-            let now = Instant::now();
-            idle.retain(|c| {
-                if now.duration_since(c.returned_at) > self.idle_timeout {
-                    expired.push(());
-                    false
-                } else {
-                    true
-                }
-            });
-        }
+        let mut idle = self.idle.lock();
+        let now = Instant::now();
+        idle.retain(|c| now.duration_since(c.returned_at) <= self.idle_timeout);
         (
-            self.idle.lock().len(),
+            idle.len(),
             self.permits.available_permits(),
             self.created.load(Ordering::Relaxed),
         )

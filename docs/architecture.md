@@ -124,7 +124,7 @@ UTF-16LE 语义、Google Jump Consistent Hash、CRC-32、1024 槽段表）均按
 16MB 分包自动递增；前端透传后端载荷时按新序号重新分帧。
 
 ### 4.6 Oracle 后端（dbType=oracle）
-- 分派：`BackendPool::get` 按数据源 `dbType` 返回 MySql 或 Oracle 池；物理 SQL 在路由重写后
+- 分派：`BackendPool::get` 按数据源 `dbType` 返回 MySQL / PostgreSQL / Oracle / SQL Server 池；物理 SQL 在路由重写后
   经 `translate_for_backend` 做方言翻译（MySQL 直传）。翻译层只负责"语法形状"，
   不可翻译的结构显式报错（绝不静默产生错误语义）。
 - 执行：驱动为同步阻塞 API，全部调用在 `spawn_blocking` 中执行；结果按 `DB_TYPE_*` 渲染为
