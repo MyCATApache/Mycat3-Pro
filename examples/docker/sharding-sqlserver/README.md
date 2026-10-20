@@ -178,6 +178,7 @@ NULL 保真。SQL Server `TINYINT` 是 0–255（MySQL TINY 有符号），查�
 | `Login failed for user 'sa'` | `MSSQL_SA_PASSWORD` 必须满足复杂度；确认容器环境一致 |
 | 证书/TLS 错误 | 自签证书用 `trustServerCertificate=true`；生产用受信证书并设 `encrypt=true` |
 | `OFFSET` 语法错误 | 检查 SQL 是否带 `ORDER BY`；方言层对无排序 offset 显式报错 |
+| DDL 报 `Permission denied` | 容器以 UID 1000 运行；宿主 UID 不是 1000 时先执行 `sudo chown -R 1000:1000 conf`（CI 已自动处理） |
 | `last_insert_id` 为 0 | 非自增表返回 0；自增表在同一条 INSERT 批次内读取 `SCOPE_IDENTITY()`（无额外往返） |
 | `XA 事务不支持 SQL Server` | 预期行为；SQL Server 分布式事务需 MSDTC，未实现 |
 | 物理表不存在 | 确认 `sqlserver-init` 成功执行；SQL Server 表/schema 手工创建 |

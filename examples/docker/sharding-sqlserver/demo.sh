@@ -3,10 +3,6 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-# 让容器内非 root 用户（UID 1000）能写配置目录（DDL 自动化会热更新配置）。
-# GitHub Actions runner 等宿主 UID 不是 1000 时，绑定挂载默认不可写。
-chmod -R a+w conf
-
 COMPOSE=(docker compose)
 MYSQL=(docker compose run --rm -T mysql-client --default-character-set=utf8mb4 -hmycat3-pro -P8066 -uroot -Ddb1 --table)
 XA=(docker compose run --rm -T mysql-client --default-character-set=utf8mb4 -hmycat3-pro -P8066 -uxa -Ddb1 --table)
