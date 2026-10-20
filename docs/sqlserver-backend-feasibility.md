@@ -417,3 +417,38 @@ SNAPSHOT 需数据库开启）。不能映射的显式报错，不能静默降�
 - `crates/server/src/tds.rs`：TDS **前端**实现（不可直接当客户端）
 - `crates/server/src/ddl.rs`：物理 DDL 的 MySQL-only 分支
 - `examples/docker/tds-frontend/`：SQL Server 作为前端的现有示例
+
+---
+
+## 15. 集成验证记录（2026-10-20）
+
+环境：SQL Server 2022 Developer 容器（`mcr.microsoft.com/mssql/server:2022-latest`），
+仓库源码构建的 Mycat 镜像；`examples/docker/sharding-sqlserver` Compose 编排。
+
+覆盖：
+
+- `orders` 取模 4 分片、点查裁剪、跨分片 `count`/`sum`/`order by + limit`；
+- `tenant_order` 枚举分片、`dict` 广播、`user_info` 单表；
+- MySQL / PostgreSQL / TDS(sqlcmd) 三种前端访问同一 SQL Server 后端；
+- `DECIMAL/DATETIME2/NVARCHAR/BIT` 等类型映射；
+- 普通事务提交/回滚、`SET autocommit=0/1`、`SAVEPOINT`；
+- 重复键错误映射（SQL Server 2627 → MySQL 1062/23000）；
+- XA 请求显式拒绝；
+- 自签 TLS + `trustServerCertificate=true` 连接；
+- SQL Server 初始化脚本重复执行（Compose `up` 多次）。
+
+验证中发现并修复：
+
+1. **物理初始化非幂等**：第二次 `docker compose up` 时 `CREATE TABLE` 报 2714；
+   改为 `IF OBJECT_ID(...) IS NULL` 包裹每个物理表。
+2. **事务控制经 sp_executesql 导致 SQL Server 266**：
+   `BEGIN TRAN` 放在 `execute` RPC 中会与 RPC 事务计数不一致；
+   事务控制/`USE`/`SET` 改走 SQL batch（`simple_query`）。
+3. **旧 Docker Hub `latest` 不含 `dbType=mssql`**：示例 Compose 增加源码 `build`
+   上下文，并在文档注明重建镜像。
+4. **心跳每 5 秒新建 TLS/Login7 连接**：按数据源缓存 SQL Server 心跳连接，
+   失败时移除重连。
+5. **连接池取连接未执行 idleTimeout**：取空闲连接时淘汰超时项。
+6. **示例脚本可执行位/重复初始化**：`demo.sh` 增加可执行位，初始化幂等。
+
+结果：上述集成用例全部通过；`cargo test --workspace` 共 **357** 个测试通过。
