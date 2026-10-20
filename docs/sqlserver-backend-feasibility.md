@@ -507,3 +507,11 @@ SNAPSHOT 需数据库开启）。不能映射的显式报错，不能静默降�
    `@@ROWCOUNT + SCOPE_IDENTITY()`，单次往返返回；多行取最后 ID，文档标注。
 
 结果：上述集成用例全部通过；`cargo test --workspace` 共 **362** 个测试通过。
+
+CI / 镜像验收（2026-10-20）：
+
+- GitHub Actions `CI` run `39449735033`：单元测试 + SQL Server 2022 Compose 集成
+  （含逻辑 `CREATE TABLE ddl_demo`、索引校验、事务/XA 拒绝、三种前端）全部通过；
+- 镜像 `mycat/mycat3-pro:v0.3.1`、`0.3.1`、`latest` 已发布，多架构
+  manifest digest `sha256:bf931a3d7418f49edfbbe3dee65852d267078b4f8b9387f6d3e78d37a9067149`
+  （`linux/amd64` + `linux/arm64`）。
