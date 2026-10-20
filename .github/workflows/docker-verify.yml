@@ -13,6 +13,10 @@ on:
         description: "若仓库是私有的，是否改为公开"
         type: boolean
         default: false
+      update_description:
+        description: "用 docker/README.md 更新 Docker Hub 仓库简介"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,6 +28,13 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - name: Update Docker Hub overview
+        if: inputs.update_description
+        env:
+          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: ./scripts/publish-dockerhub.sh --description-only
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
