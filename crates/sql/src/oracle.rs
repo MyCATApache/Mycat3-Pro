@@ -29,7 +29,7 @@ use thiserror::Error;
 pub enum DialectError {
     #[error("SQL parse error: {0}")]
     Parse(String),
-    #[error("Oracle 不支持: {0}")]
+    #[error("SQL 方言不支持: {0}")]
     Unsupported(String),
 }
 

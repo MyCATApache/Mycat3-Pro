@@ -264,8 +264,9 @@ impl TransactionSession {
 
     /// XA 两阶段提交：
     /// 1) 各分支 XA END + XA PREPARE（任一失败 → 全部 XA ROLLBACK 并返回错误）；
-    /// 2) 单参与者 → XA COMMIT ONE PHASE；多参与者 → 先落 WAL 决策（fsync）
-    ///    再逐分支 XA COMMIT；全部成功后 mark_done。
+    /// 2) 先落 WAL 决策（fsync），再逐分支提交已 PREPARE 的事务
+    ///    （MySQL XA COMMIT / PG COMMIT PREPARED；单参与者同样如此）；
+    ///    全部成功后 mark_done。
     async fn xa_commit(&mut self, xa_log: &Arc<XaLog>) -> Result<(), BackendError> {
         let ctx = self.xa.as_ref().unwrap();
         let gtrid = ctx.gtrid.clone();
@@ -287,12 +288,12 @@ impl TransactionSession {
         }
         // 2) COMMIT
         let participants: Vec<String> = self.pinned.keys().cloned().collect();
-        if participants.len() == 1 {
-            let ds = &participants[0];
-            let session = self.pinned.get_mut(ds).unwrap();
-            return session.xa_commit_branch(&gtrid, ds, true).await;
+        if participants.is_empty() {
+            return Ok(());
         }
-        // 决策 WAL（fsync）先于广播 COMMIT
+        // 所有分支都已 PREPARE，单参与者也必须 commit prepared：
+        // PostgreSQL 的普通 COMMIT 不会结束 prepared transaction。
+        // 单参与者同样先落决策 WAL，保证崩溃后可裁决。
         if let Err(e) = xa_log.commit_decision(&gtrid, &participants) {
             // WAL 失败：不能进入提交阶段（崩溃将无法裁决），整体回滚
             for (ds, session) in self.pinned.iter_mut() {

@@ -56,14 +56,43 @@ fn is_conn_error(e: &oracledb::Error) -> bool {
 }
 
 impl OracleError {
+    /// Map Oracle errors to the MySQL error surface used by all frontends.
+    pub fn to_mysql_parts(&self) -> (u16, String, String) {
+        match self {
+            OracleError::Driver(e) => {
+                if let oracledb::ErrorKind::DbError(d) = e.kind() {
+                    let (errno, state) = match d.code() {
+                        1 => (1062, "23000"),    // unique constraint
+                        2291 => (1452, "23000"), // parent key not found
+                        2292 => (1451, "23000"), // child record found
+                        1400 => (1048, "23000"), // null into NOT NULL
+                        942 => (1146, "42S02"),  // table or view does not exist
+                        904 => (1054, "42S22"),  // invalid identifier
+                        1017 => (1045, "28000"), // invalid credentials
+                        955 => (1050, "42S01"),  // name already used
+                        1418 => (1091, "42000"), // index does not exist
+                        12514 | 12541 | 12170 => (2003, "HY000"),
+                        _ => (1105, "HY000"),
+                    };
+                    (errno, state.to_string(), d.message().to_string())
+                } else {
+                    (2003, "HY000".into(), self.to_string())
+                }
+            }
+            OracleError::Timeout(m) => (1105, "HY000".into(), m.clone()),
+            OracleError::PoolExhausted => (1040, "08004".into(), self.to_string()),
+            OracleError::BadConnectString(m) => (2003, "HY000".into(), m.clone()),
+            OracleError::Join(m) => (1105, "HY000".into(), m.to_string()),
+        }
+    }
+
     /// 是否为连接级错误（连接不可复用，需重建）。
     pub fn is_conn_level(&self) -> bool {
         match self {
             OracleError::Driver(e) => is_conn_error(e),
             OracleError::Join(_) => true,
-            OracleError::PoolExhausted
-            | OracleError::BadConnectString(_)
-            | OracleError::Timeout(_) => false,
+            OracleError::PoolExhausted | OracleError::BadConnectString(_) => false,
+            OracleError::Timeout(_) => true,
         }
     }
 }
@@ -148,6 +177,9 @@ pub struct OraclePool {
     name: String,
     cfg: Config,
     max_con: usize,
+    min_con: usize,
+    idle_timeout: Duration,
+    connect_timeout: Duration,
     /// 连接建立后执行的会话初始化语句（对应 MySQL 池 initSqls；如
     /// `ALTER SESSION SET NLS_DATE_FORMAT=...` 解决日期字面量格式兼容）
     init_sqls: Vec<String>,
@@ -157,16 +189,41 @@ pub struct OraclePool {
 }
 
 impl OraclePool {
-    pub fn new(name: &str, cfg: Config, max_con: usize, init_sqls: Vec<String>) -> Arc<Self> {
+    pub fn new(
+        name: &str,
+        cfg: Config,
+        max_con: usize,
+        min_con: usize,
+        idle_timeout: Duration,
+        connect_timeout: Duration,
+        init_sqls: Vec<String>,
+    ) -> Arc<Self> {
+        let max_con = max_con.max(1);
         Arc::new(OraclePool {
             name: name.to_string(),
             cfg,
-            max_con: max_con.max(1),
+            max_con,
+            min_con: min_con.min(max_con),
+            idle_timeout,
+            connect_timeout,
             init_sqls,
             idle: Mutex::new(Vec::new()),
-            permits: Arc::new(Semaphore::new(max_con.max(1))),
+            permits: Arc::new(Semaphore::new(max_con)),
             created: AtomicUsize::new(0),
         })
+    }
+
+    /// 预热 minCon 条空闲连接。
+    pub async fn prewarm(self: &Arc<Self>) {
+        for _ in 0..self.min_con {
+            match self.acquire().await {
+                Ok(c) => drop(c),
+                Err(e) => {
+                    warn!(pool = %self.name, error = %e, "oracle pool prewarm failed");
+                    break;
+                }
+            }
+        }
     }
 
     /// 异步取出一条连接（空闲复用 + ping；上限 max_con）。
@@ -180,8 +237,21 @@ impl OraclePool {
         // 同步快路径：取空闲（守卫先释放，避免跨 await 持有）。
         // 免 ping 复用：刚归还且干净的连接直接交付；超窗才 ping，脏连接才 rollback
         //（事务内错误/中断残留的未提交事务），避免每次取用两趟固定往返。
-        let candidate = self.idle.lock().pop();
-        if let Some(idle_conn) = candidate {
+        loop {
+            let candidate = {
+                let mut idle = self.idle.lock();
+                let now = std::time::Instant::now();
+                let mut candidate = None;
+                while let Some(c) = idle.pop() {
+                    if now.duration_since(c.returned_at) > self.idle_timeout {
+                        continue;
+                    }
+                    candidate = Some(c);
+                    break;
+                }
+                candidate
+            };
+            let Some(idle_conn) = candidate else { break };
             let r = tokio::task::spawn_blocking(move || {
                 let fresh = idle_conn.returned_at.elapsed() < PING_AFTER_IDLE && !idle_conn.dirty;
                 let alive = fresh || idle_conn.conn.ping().is_ok();
@@ -203,19 +273,25 @@ impl OraclePool {
                 });
             }
         }
-        // 新建（阻塞 → spawn_blocking）+ 会话初始化语句
+        // 新建（阻塞 → spawn_blocking）+ 会话初始化语句；连接超时覆盖握手/初始化。
         let cfg = self.cfg.clone();
         let init_sqls = self.init_sqls.clone();
-        let conn = tokio::task::spawn_blocking(move || {
+        let fut = tokio::task::spawn_blocking(move || {
             let conn = oracledb::connect(cfg)?;
             for sql in &init_sqls {
                 conn.execute(sql, &[])?;
             }
             Ok::<Connection, oracledb::Error>(conn)
-        })
-        .await
-        .map_err(OracleError::Join)?
-        .map_err(OracleError::Driver)?;
+        });
+        let conn = match tokio::time::timeout(self.connect_timeout, fut).await {
+            Ok(r) => r.map_err(OracleError::Join)?.map_err(OracleError::Driver)?,
+            Err(_) => {
+                return Err(OracleError::Timeout(format!(
+                    "oracle connect/init timeout after {:?}",
+                    self.connect_timeout
+                )))
+            }
+        };
         self.created.fetch_add(1, Ordering::Relaxed);
         Ok(PooledOracleConn {
             conn: Some(conn),
@@ -244,8 +320,11 @@ impl OraclePool {
 
     /// 池快照：(空闲连接数, 可用额度, 累计创建)。供 `show @@datasource` 管理命令。
     pub fn snapshot(&self) -> (usize, usize, u64) {
+        let mut idle = self.idle.lock();
+        let now = std::time::Instant::now();
+        idle.retain(|c| now.duration_since(c.returned_at) <= self.idle_timeout);
         (
-            self.idle.lock().len(),
+            idle.len(),
             self.permits.available_permits(),
             self.created.load(Ordering::Relaxed) as u64,
         )

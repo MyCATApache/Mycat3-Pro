@@ -91,12 +91,19 @@ impl BackendPool {
                             datasource,
                             oracle_cfg,
                             cfg.max_con as usize,
+                            cfg.min_con as usize,
+                            Duration::from_millis(cfg.idle_timeout.max(1000)),
+                            Duration::from_millis(cfg.max_connect_timeout.max(1000)),
                             cfg.init_sqls.clone(),
                         );
                         state
                             .oracle_pools
                             .write()
                             .insert(datasource.to_string(), p.clone());
+                        if let Ok(h) = tokio::runtime::Handle::try_current() {
+                            let warm = p.clone();
+                            h.spawn(async move { warm.prewarm().await });
+                        }
                         p
                     }
                 }
@@ -148,20 +155,29 @@ impl BackendPool {
                 match existing {
                     Some(p) => p,
                     None => {
-                        let ep =
+                        let mut ep =
                             mycat3_pgclient::parse_pg_jdbc_url(&cfg.url, &cfg.user, &cfg.password)
                                 .map_err(|e| {
                                     BackendError::Conn(format!("datasource {}: {}", datasource, e))
                                 })?;
+                        ep.connect_timeout =
+                            Duration::from_millis(cfg.max_connect_timeout.max(1000));
                         let p = mycat3_pgclient::PgDataSourcePool::new(
                             datasource,
                             ep,
                             cfg.max_con as usize,
+                            cfg.min_con as usize,
+                            Duration::from_millis(cfg.idle_timeout.max(1000)),
+                            cfg.init_sqls.clone(),
                         );
                         state
                             .pg_pools
                             .write()
                             .insert(datasource.to_string(), p.clone());
+                        if let Ok(h) = tokio::runtime::Handle::try_current() {
+                            let warm = p.clone();
+                            h.spawn(async move { warm.prewarm().await });
+                        }
                         p
                     }
                 }
@@ -324,6 +340,15 @@ impl BackendSession {
                         Ok(backend)
                     }
                     Err(e) => {
+                        // 超时后底层 Connection 已被 spawn_blocking 任务带走，
+                        // 不能把当前会话当成可用连接；统一按连接级错误处理。
+                        if matches!(e, mycat3_oracle::OracleError::Timeout(_)) {
+                            conn.mark_broken();
+                            return Err(BackendError::Conn(format!(
+                                "oracle query timeout: {}",
+                                sql
+                            )));
+                        }
                         // SQL 级错误（ORA-xxxx）连接可复用；仅连接级错误销毁
                         if e.is_conn_level() {
                             conn.mark_broken();
@@ -333,7 +358,20 @@ impl BackendSession {
                 }
             }
             BackendKind::Pg(conn) => {
-                let r = conn.conn().query(sql).await;
+                let r = match timeout {
+                    Some(t) => match tokio::time::timeout(t, conn.conn().query(sql)).await {
+                        Ok(r) => r,
+                        Err(_) => {
+                            // simple_query 可能留下未读的协议包，不能复用该连接。
+                            conn.mark_broken();
+                            return Err(BackendError::Conn(format!(
+                                "postgres query timeout: {}",
+                                sql
+                            )));
+                        }
+                    },
+                    None => conn.conn().query(sql).await,
+                };
                 match r {
                     Ok(outcome) => Ok(pg_to_backend(outcome)),
                     Err(e) => {
@@ -398,8 +436,75 @@ impl BackendSession {
                 .await
                 .map(|_| ())
                 .map_err(BackendError::from),
-            BackendKind::Oracle(_) => Ok(()),
-            BackendKind::Pg(conn) => conn.conn().query(sql).await.map(|_| ()).map_err(pg_err),
+            BackendKind::Oracle(conn) => {
+                let upper = sql.trim().to_ascii_uppercase();
+                if upper.starts_with("SET AUTOCOMMIT") {
+                    let value = upper
+                        .split('=')
+                        .nth(1)
+                        .unwrap_or("")
+                        .trim()
+                        .trim_end_matches(';')
+                        .trim();
+                    if value == "0" || value == "OFF" {
+                        self.in_tx = true;
+                        conn.set_dirty(true);
+                    } else if value == "1" || value == "ON" {
+                        self.in_tx = false;
+                        conn.commit().await.map_err(oracle_err)?;
+                        conn.set_dirty(false);
+                    }
+                    return Ok(());
+                }
+                // MySQL-only session switches: Oracle has no equivalent; ignore
+                // rather than failing every JDBC connection.
+                if upper.starts_with("SET NAMES")
+                    || upper.starts_with("SET SQL_MODE")
+                    || upper.starts_with("SET CHARACTER SET")
+                    || upper.starts_with("SET CHARACTER_SET_")
+                {
+                    return Ok(());
+                }
+                // Other SET statements are not portable to Oracle. Keep the
+                // historical no-op behavior, but do not pretend to translate
+                // MySQL-specific syntax.
+                Ok(())
+            }
+            BackendKind::Pg(conn) => {
+                let upper = sql.trim().to_ascii_uppercase();
+                if upper.starts_with("SET AUTOCOMMIT") {
+                    let value = upper
+                        .split('=')
+                        .nth(1)
+                        .unwrap_or("")
+                        .trim()
+                        .trim_end_matches(';')
+                        .trim();
+                    if value == "0" || value == "OFF" {
+                        if !self.in_tx {
+                            conn.conn().query("BEGIN").await.map_err(pg_err)?;
+                            self.in_tx = true;
+                        }
+                    } else if value == "1" || value == "ON" {
+                        if self.in_tx {
+                            conn.conn().query("COMMIT").await.map_err(pg_err)?;
+                            self.in_tx = false;
+                        }
+                    }
+                    return Ok(());
+                }
+                // MySQL-only SET statements must not reach PostgreSQL: a
+                // rejected SET inside a transaction aborts the whole transaction.
+                if upper.starts_with("SET NAMES")
+                    || upper.starts_with("SET SQL_MODE")
+                    || upper.starts_with("SET CHARACTER SET")
+                    || upper.starts_with("SET CHARACTER_SET_")
+                    || upper.starts_with("SET @")
+                {
+                    return Ok(());
+                }
+                conn.conn().query(sql).await.map(|_| ()).map_err(pg_err)
+            }
             BackendKind::Mssql(conn) => conn
                 .conn()
                 .set_forward(sql, Some(Duration::from_secs(30)))
@@ -632,13 +737,30 @@ pub(crate) fn mssql_err(e: MssqlError) -> BackendError {
 
 /// PG 错误 → BackendError：SQL 级（Db）→ Server（可复用）；连接级 → Conn（销毁连接）。
 fn pg_err(e: PgError) -> BackendError {
-    if e.is_conn_level() {
-        BackendError::Conn(e.to_string())
-    } else {
-        BackendError::Server {
-            errno: 1105,
-            sqlstate: "HY000".into(),
-            message: e.to_string(),
+    match e {
+        PgError::Conn(m) => BackendError::Conn(m),
+        PgError::Db { code, message } => {
+            let (errno, sqlstate) = match code.as_str() {
+                "23505" => (1062, "23000"),
+                "23503" => (1452, "23000"),
+                "23502" => (1048, "23000"),
+                "23514" => (3819, "HY000"),
+                "42P01" => (1146, "42S02"),
+                "42703" => (1054, "42S22"),
+                "42601" | "42P02" => (1064, "42000"),
+                "28P01" => (1045, "28000"),
+                "3D000" => (1049, "42000"),
+                "42501" => (1142, "42000"),
+                "22001" => (1406, "22001"),
+                "22007" | "22008" => (1292, "22007"),
+                "40001" | "40P01" => (1213, "40001"),
+                _ => (1105, "HY000"),
+            };
+            BackendError::Server {
+                errno,
+                sqlstate: sqlstate.to_string(),
+                message: format!("{}: {}", code, message),
+            }
         }
     }
 }
@@ -646,13 +768,13 @@ fn pg_err(e: PgError) -> BackendError {
 /// Oracle 错误 → BackendError：连接级 → Conn（销毁连接）；SQL 级 → Server（可复用）。
 fn oracle_err(e: mycat3_oracle::OracleError) -> BackendError {
     if e.is_conn_level() {
-        BackendError::Conn(e.to_string())
-    } else {
-        BackendError::Server {
-            errno: 1105,
-            sqlstate: "HY000".into(),
-            message: e.to_string(),
-        }
+        return BackendError::Conn(e.to_string());
+    }
+    let (errno, sqlstate, message) = e.to_mysql_parts();
+    BackendError::Server {
+        errno,
+        sqlstate,
+        message,
     }
 }
 
@@ -805,6 +927,34 @@ mod tests {
             instance_type: InstanceType::ReadWrite,
             idle_timeout: 60_000,
             r#type: "NATIVE".into(),
+        }
+    }
+
+    #[test]
+    fn maps_pg_sqlstate_to_mysql_error() {
+        let e = pg_err(PgError::Db {
+            code: "23505".into(),
+            message: "duplicate key".into(),
+        });
+        match e {
+            BackendError::Server {
+                errno,
+                sqlstate,
+                message,
+            } => {
+                assert_eq!(errno, 1062);
+                assert_eq!(sqlstate, "23000");
+                assert!(message.contains("23505"));
+            }
+            _ => panic!("expected server error"),
+        }
+        let e = pg_err(PgError::Db {
+            code: "42P01".into(),
+            message: "missing table".into(),
+        });
+        match e {
+            BackendError::Server { errno, .. } => assert_eq!(errno, 1146),
+            _ => panic!("expected server error"),
         }
     }
 

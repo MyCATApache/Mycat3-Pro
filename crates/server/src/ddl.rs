@@ -544,7 +544,43 @@ pub async fn create_table(
     // 5. 计算物理节点（用于建物理表）
     let nodes = physical_nodes_of(&table_cfg)?;
 
-    // 6. 写配置 + 热更新
+    // 6. 物理建库建表：先确认所有物理节点成功，再提交逻辑配置。
+    // 分片/全局序列表由 Mycat 生成 id；SQL Server 必须用普通数值列而非
+    // IDENTITY，否则显式 id 插入会被 SQL Server 拒绝。
+    let mycat_managed_auto = match &table_cfg {
+        TableCfg::Sharding(_) => true,
+        TableCfg::Global(g) => {
+            g.sequence_type
+                .as_deref()
+                .map(|s| s.eq_ignore_ascii_case("GLOBAL_SEQUENCE"))
+                .unwrap_or(false)
+                && g.broadcast.len() > 1
+        }
+        TableCfg::Normal(_) => false,
+    };
+    // 旧实现先写配置并吞掉物理错误，会让客户端看到“建表成功”但物理表不存在。
+    let ddl_template = normalize_create_table(&body);
+    let mut created = 0;
+    let mut failures: Vec<String> = Vec::new();
+    for node in &nodes {
+        match create_physical_node(state, node, &ddl_template, mycat_managed_auto).await {
+            Ok(()) => created += 1,
+            Err(e) => {
+                tracing::warn!(node = %node.unique_name(), "physical create failed: {}", e);
+                failures.push(format!("{}: {}", node.unique_name(), e));
+            }
+        }
+    }
+    if !failures.is_empty() {
+        return Err(EngineError::general(format!(
+            "CREATE TABLE 物理建表失败（{}/{} 节点）：{}",
+            failures.len(),
+            nodes.len(),
+            failures[0]
+        )));
+    }
+
+    // 7. 写配置 + 热更新
     let (schema_lc2, table_lc2) = (schema_lc.clone(), table_lc.clone());
     commit_config(state, move |cfg| {
         let schema = cfg.schemas.get_mut(&schema_lc2).ok_or_else(|| {
@@ -564,19 +600,9 @@ pub async fn create_table(
         }
         Ok(())
     })?;
-
-    // 7. 物理建库建表（对应 CreateTableUtils.createPhysicalTable；错误 log-and-continue）
-    let ddl_template = normalize_create_table(&body);
-    let mut created = 0;
-    for node in &nodes {
-        match create_physical_node(state, node, &ddl_template).await {
-            Ok(()) => created += 1,
-            Err(e) => tracing::warn!(node = %node.unique_name(), "physical create failed: {}", e),
-        }
-    }
     tracing::info!(
         schema = %schema_name, table = %table_name, nodes = nodes.len(), created,
-        "table created (config + physical)"
+        "table created (physical + config)"
     );
     Ok(EngineOutcome::Ok {
         affected_rows: 0,
@@ -825,6 +851,7 @@ async fn create_physical_node(
     state: &std::sync::Arc<ServerState>,
     node: &mycat3_router::IndexDataNode,
     ddl_template: &str,
+    mycat_managed_auto: bool,
 ) -> Result<(), EngineError> {
     let replica = state.replica();
     let ds = replica
@@ -837,7 +864,7 @@ async fn create_physical_node(
         .ok_or_else(|| EngineError::general(format!("datasource {} not found", ds)))?;
     let db_type = ds_cfg.db_type.to_ascii_lowercase();
     if matches!(db_type.as_str(), "mssql" | "sqlserver" | "mssqlserver") {
-        return create_mssql_physical_node(&ds_cfg, node, ddl_template).await;
+        return create_mssql_physical_node(&ds_cfg, node, ddl_template, mycat_managed_auto).await;
     }
     if matches!(db_type.as_str(), "postgresql" | "postgres" | "pgsql") {
         return create_pg_physical_node(&ds_cfg, node, ddl_template).await;
@@ -1058,6 +1085,7 @@ async fn create_mssql_physical_node(
     ds_cfg: &DatasourceConfig,
     node: &mycat3_router::IndexDataNode,
     ddl_template: &str,
+    mycat_managed_auto: bool,
 ) -> Result<(), EngineError> {
     let ep = mycat3_mssql::parse_mssql_jdbc_url(&ds_cfg.url, &ds_cfg.user, &ds_cfg.password)
         .map_err(|e| EngineError::general(format!("mssql datasource: {}", e)))?;
@@ -1078,8 +1106,12 @@ async fn create_mssql_physical_node(
     conn.execute_script(&create_schema, Some(std::time::Duration::from_secs(30)))
         .await
         .map_err(|e| EngineError::general(format!("mssql create schema: {}", e)))?;
-    let ddl = mycat3_sql::translate_mssql_ddl(ddl_template, schema, &node.table_name)
-        .map_err(|e| EngineError::general(format!("mssql DDL translate: {}", e)))?;
+    let ddl = if mycat_managed_auto {
+        mycat3_sql::translate_mssql_ddl_managed(ddl_template, schema, &node.table_name)
+    } else {
+        mycat3_sql::translate_mssql_ddl(ddl_template, schema, &node.table_name)
+    }
+    .map_err(|e| EngineError::general(format!("mssql DDL translate: {}", e)))?;
     conn.execute_script(&ddl, Some(std::time::Duration::from_secs(60)))
         .await
         .map_err(|e| EngineError::general(format!("mssql create table: {}", e)))?;
@@ -1256,16 +1288,9 @@ pub async fn drop_table(
         }
     };
 
-    // 删除配置
-    let (s2, t2) = (schema_lc.clone(), table_lc.clone());
-    commit_config(state, move |cfg| {
-        if let Some(schema) = cfg.schemas.get_mut(&s2) {
-            remove_table_everywhere(schema, &t2);
-        }
-        Ok(())
-    })?;
-
-    // 物理删除（幂等，错误吞掉 —— Java 同）
+    // 物理删除（幂等）。先物理、后删配置：物理失败时保留逻辑映射，
+    // 避免“配置已删但表还在”的孤儿表。
+    let mut failures: Vec<String> = Vec::new();
     for node in &nodes {
         let db_type = physical_node_db_type(state, node).unwrap_or_default();
         let r = match db_type.as_str() {
@@ -1286,8 +1311,26 @@ pub async fn drop_table(
         };
         if let Err(e) = r {
             tracing::warn!(node = %node.unique_name(), "physical drop failed: {}", e);
+            failures.push(format!("{}: {}", node.unique_name(), e));
         }
     }
+    if !failures.is_empty() {
+        return Err(EngineError::general(format!(
+            "DROP TABLE 物理删除失败（{}/{} 节点）：{}",
+            failures.len(),
+            nodes.len(),
+            failures[0]
+        )));
+    }
+
+    // 删除配置
+    let (s2, t2) = (schema_lc.clone(), table_lc.clone());
+    commit_config(state, move |cfg| {
+        if let Some(schema) = cfg.schemas.get_mut(&s2) {
+            remove_table_everywhere(schema, &t2);
+        }
+        Ok(())
+    })?;
     Ok(EngineOutcome::Ok {
         affected_rows: 0,
         last_insert_id: 0,
@@ -1881,10 +1924,11 @@ fn name_from_json_key(body: &str, key: &str) -> Result<String, EngineError> {
 async fn repair_physical_tables(state: &std::sync::Arc<ServerState>) -> Result<(), EngineError> {
     let meta = state.metadata();
     let mut repaired = 0u64;
+    let mut errors: Vec<String> = Vec::new();
     for (sname, schema) in &meta.schemas {
         for (tname, t) in &schema.tables {
-            // (create_sql, [(target, 物理schema, 物理表)])
-            let plan: Option<(String, Vec<(String, String, String)>)> = match t {
+            // (create_sql, [(target, 物理schema, 物理表)], mycat_managed_auto)
+            let plan: Option<(String, Vec<(String, String, String)>, bool)> = match t {
                 TableMeta::Sharding {
                     create_sql: Some(c),
                     nodes,
@@ -1901,10 +1945,12 @@ async fn repair_physical_tables(state: &std::sync::Arc<ServerState>) -> Result<(
                             )
                         })
                         .collect(),
+                    true,
                 )),
                 TableMeta::Global {
                     create_sql: Some(c),
                     target_schemas,
+                    sequence_type,
                     ..
                 } => Some((
                     c.clone(),
@@ -1912,6 +1958,11 @@ async fn repair_physical_tables(state: &std::sync::Arc<ServerState>) -> Result<(
                         .iter()
                         .map(|(t, s)| (t.clone(), s.clone(), tname.clone()))
                         .collect(),
+                    sequence_type
+                        .as_deref()
+                        .map(|s| s.eq_ignore_ascii_case("GLOBAL_SEQUENCE"))
+                        .unwrap_or(false)
+                        && target_schemas.len() > 1,
                 )),
                 TableMeta::Normal {
                     create_sql: Some(c),
@@ -1930,7 +1981,7 @@ async fn repair_physical_tables(state: &std::sync::Arc<ServerState>) -> Result<(
                     } else {
                         table.clone()
                     };
-                    Some((c.clone(), vec![(target.clone(), ps, pt)]))
+                    Some((c.clone(), vec![(target.clone(), ps, pt)], false))
                 }
                 _ => {
                     if let TableMeta::View { .. } = t {
@@ -1945,10 +1996,13 @@ async fn repair_physical_tables(state: &std::sync::Arc<ServerState>) -> Result<(
                     None
                 }
             };
-            let Some((create_sql, nodes)) = plan else {
+            let Some((create_sql, nodes, mycat_managed_auto)) = plan else {
                 continue;
             };
-            let template = normalize_create_table(&create_sql);
+            // createTableSQL 保留了 DRDS 的 DBPARTITION/TBPARTITION 后缀；
+            // 物理建表语法不能包含它，必须先剥离。
+            let (create_body, _) = split_drds_suffix(&create_sql);
+            let template = normalize_create_table(&create_body);
             for (target, ps, pt) in nodes {
                 let replica = state.replica();
                 let ds = match replica.resolve(&target, true, false, false) {
@@ -1981,13 +2035,30 @@ async fn repair_physical_tables(state: &std::sync::Arc<ServerState>) -> Result<(
                     table_index: -1,
                     index: -1,
                 };
-                create_physical_node(state, &node, &template).await?;
-                repaired += 1;
+                match create_physical_node(state, &node, &template, mycat_managed_auto).await {
+                    Ok(()) => repaired += 1,
+                    Err(e) => {
+                        tracing::warn!(
+                            node = %node.unique_name(),
+                            error = %e,
+                            "repairPhysicalTable 节点失败，继续其余节点"
+                        );
+                        errors.push(format!("{}: {}", node.unique_name(), e));
+                    }
+                }
             }
         }
     }
-    tracing::info!(repaired, "repairPhysicalTable 完成");
-    Ok(())
+    tracing::info!(repaired, failed = errors.len(), "repairPhysicalTable 完成");
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(EngineError::general(format!(
+            "repairPhysicalTable: {} 个节点失败，首个错误: {}",
+            errors.len(),
+            errors[0]
+        )))
+    }
 }
 
 /// CREATE VIEW：物理执行（schema 默认 target）+ 视图元数据注册（对应 Java
@@ -2776,6 +2847,19 @@ mod tests {
         let s = normalize_create_table("CREATE TABLE IF NOT EXISTS t2 (a INT)");
         assert_eq!(s.matches("IF NOT EXISTS").count(), 1);
         assert!(s.contains("__TABLE__"));
+    }
+
+    #[test]
+    fn repair_body_strips_drds_suffix() {
+        let sql = "CREATE TABLE t(id INT PRIMARY KEY) DBPARTITION BY hash(id) DBPARTITIONS 2 TBPARTITION BY hash(id) TBPARTITIONS 2";
+        let (body, _) = split_drds_suffix(sql);
+        let normalized = normalize_create_table(&body);
+        assert!(
+            !normalized.to_lowercase().contains("dbpartition"),
+            "{}",
+            normalized
+        );
+        assert!(normalized.contains("__TABLE__"), "{}", normalized);
     }
 
     #[test]

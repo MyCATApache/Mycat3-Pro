@@ -25,6 +25,7 @@ pub use cache_key::{normalize_cache_query, normalize_cache_sql, NormalizedQuery}
 pub use hint::{parse_hint, Hint};
 pub use meta::{MetaError, Metadata, SchemaMeta, TableMeta};
 pub use mssql::translate_ddl as translate_mssql_ddl;
+pub use mssql::translate_ddl_managed as translate_mssql_ddl_managed;
 pub use mssql::translate_sql as translate_mssql_sql;
 pub use oracle::{
     translate_ddl as translate_oracle_ddl, translate_sql as translate_oracle_sql, DialectError,

@@ -1,7 +1,7 @@
 name: Docker Tag Alias
 
 # 为已存在的 Docker Hub 镜像补一个标签（不重新构建）。
-# 典型用途：手动发布产生了 0.3.2，补 v0.3.2 别名；或把 latest 指向某个版本。
+# 典型用途：手动发布产生了 0.3.3，补 v0.3.3 别名；或把 latest 指向某个版本。
 # 前置 Secrets 与 Docker Publish 相同：DOCKERHUB_USERNAME / DOCKERHUB_TOKEN。
 on:
   workflow_dispatch:
@@ -9,11 +9,11 @@ on:
       source:
         description: "源标签（必须已存在）"
         required: true
-        default: "0.3.2"
+        default: "0.3.3"
       target:
         description: "目标标签（新建/覆盖）"
         required: true
-        default: "v0.3.2"
+        default: "v0.3.3"
 
 permissions:
   contents: read

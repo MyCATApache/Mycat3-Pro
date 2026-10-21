@@ -262,8 +262,8 @@ SQL Server 后端应走“类型化行 → 字符串行 → MySQL 文本载荷�
 - `BIT` 的 `0/1` 与 TRUE/FALSE；
 - `last_insert_id`：SQL Server 的 TDS 结果没有 MySQL OK 包的 insert id；
   Mycat 在 INSERT 语句后追加 `SELECT CAST(@@ROWCOUNT...)`/`SCOPE_IDENTITY()`
-  同批次返回（单次往返），非自增表返回 0；多行 INSERT 返回最后生成的 ID
-  （`SCOPE_IDENTITY()` 语义，与 MySQL 的“首个 ID”不同，已在文档标注）。
+  同批次返回（单次往返），非自增表返回 0；多行 INSERT 返回首个生成的 ID
+  （由 `SCOPE_IDENTITY()` 与 `@@ROWCOUNT` 推导；假定 identity 步长 1）。
 
 ---
 
@@ -460,6 +460,23 @@ SNAPSHOT 需数据库开启）。不能映射的显式报错，不能静默降�
 
 ---
 
+## 15. 集成验证记录（2026-10-21 增补）
+
+本轮修复的回归测试（PostgreSQL 16 + Oracle Free 23ai + SQL Server 2022）：
+
+- PG `SET autocommit=0 → INSERT → SET autocommit=1`：新连接可见已提交行；不再向 PG
+  透传 MySQL 的 `SET autocommit`，也不会出现 `25P02 transaction is aborted`。
+- PG 单参与者 XA：`BEGIN/INSERT/COMMIT` 后 `pg_prepared_xacts` 为 0，行已提交。
+- PG `repairPhysicalTable`：DRDS 创建的表删除物理表后可通过 repair 重建。
+- PG 查询超时（`executeTimeout`）：`pg_sleep(3)` 约 1s 返回 1105 并销毁连接。
+- PG 唯一键错误映射为 MySQL 1062/23000；`BOOLEAN` 结果输出 1/0。
+- Oracle `SET autocommit=1` 提交隐式事务；唯一键错误映射 1062/23000。
+- SQL Server：分片 `AUTO_INCREMENT` 表物理列为普通 BIGINT（`is_identity=0`），
+  由 Mycat 序列生成 id 后可多行插入；普通表仍为 IDENTITY；`BIT NULL` 可读写。
+- SQL Server `last_insert_id`：单行 3、多行 2 行返回首个 id 4（此前返回末个 5）。
+- SQL Server 索引 repair：删除物理索引后 `repairPhysicalTable` 会补建。
+- 新增 e2e：mock MySQL 后端验证 `SET autocommit=1` 发送 COMMIT 且不透传 SET。
+
 ## 15. 集成验证记录（2026-10-20）
 
 环境：SQL Server 2022 Developer 容器（`mcr.microsoft.com/mssql/server:2022-latest`），
@@ -509,9 +526,9 @@ SNAPSHOT 需数据库开启）。不能映射的显式报错，不能静默降�
    `CREATE INDEX`；`UNIQUE KEY` 转为 `UNIQUE` 约束（测试覆盖）。
 8. **`DROP TABLE` 对 SQL Server 静默跳过**：增加 mssql 物理删除分支并验证。
 9. **`LAST_INSERT_ID` 额外往返**：INSERT 批次内追加
-   `@@ROWCOUNT + SCOPE_IDENTITY()`，单次往返返回；多行取最后 ID，文档标注。
+   `@@ROWCOUNT + SCOPE_IDENTITY()`，单次往返返回；后续修复为多行返回首个 ID。
 
-结果：上述集成用例全部通过；`cargo test --workspace` 共 **374** 个测试通过。
+结果：上述集成用例全部通过；`cargo test --workspace` 共 **379** 个测试通过。
 
 2026-10-21 增补（跨后端物理 DDL + 端到端流式）：
 
@@ -526,10 +543,15 @@ SNAPSHOT 需数据库开启）。不能映射的显式报错，不能静默降�
   `RENAME TABLE`（`sp_rename`）通过。
 - 流式：5000 行结果经 MySQL CLI / psql / sqlcmd 三种前端完整接收，
   DEBUG 日志均确认进入 `SQL Server streaming result started` 路径。
+- 2026-10-21 修复回归：PG/Oracle `SET autocommit=1` 提交、PG 单参与者 XA
+  `COMMIT PREPARED`、DRDS 表 repair、物理 DDL 失败不再假成功、PG 查询超时、
+  Oracle 超时连接销毁、分片自增表 SQL Server 普通列生成、SQL Server identity
+  首 ID、可空 BIT 类型、PG/Oracle SQLSTATE/ORA 错误码映射、PG/Oracle 池
+  `minCon`/`idleTimeout`/`initSqls`/连接超时、索引 repair。
 
 CI / 镜像验收（2026-10-21，v0.3.2）：
 
-- GitHub Actions `CI` run `39606911776`：374 个单测 + SQL Server 2022 Compose 集成
+- GitHub Actions `CI` run `39606911776`：379 个单测 + SQL Server 2022 Compose 集成
   （含逻辑 `CREATE TABLE ddl_demo`、索引校验、事务/XA 拒绝、三种前端）全部通过；
 - 镜像 `mycat/mycat3-pro:v0.3.2`、`0.3.2`、`latest` 已发布，多架构
   manifest digest `sha256:066af41088348b218f23de47b6280a98e1208f0a1fe1d3b6ece4aa584f0c07ad`

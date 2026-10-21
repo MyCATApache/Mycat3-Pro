@@ -33,6 +33,27 @@ pub fn translate_sql(sql: &str) -> Result<String, DialectError> {
         Parser::parse_sql(&MySqlDialect {}, sql).map_err(|e| DialectError::Parse(e.to_string()))?;
     let mut out = Vec::with_capacity(stmts.len());
     for mut stmt in stmts {
+        if let Statement::Insert(insert) = &stmt {
+            if insert.returning.is_some() {
+                return Err(DialectError::Unsupported(
+                    "PostgreSQL INSERT ... RETURNING 暂不支持（Mycat 写结果模型只返回 OK）".into(),
+                ));
+            }
+        }
+        if let Statement::Update { returning, .. } = &stmt {
+            if returning.is_some() {
+                return Err(DialectError::Unsupported(
+                    "PostgreSQL UPDATE ... RETURNING 暂不支持（Mycat 写结果模型只返回 OK）".into(),
+                ));
+            }
+        }
+        if let Statement::Delete(delete) = &stmt {
+            if delete.returning.is_some() {
+                return Err(DialectError::Unsupported(
+                    "PostgreSQL DELETE ... RETURNING 暂不支持（Mycat 写结果模型只返回 OK）".into(),
+                ));
+            }
+        }
         // 1) 表达式/关系位置的标识符：反引号 → 双引号
         let mut v = PgQuoteVisitor;
         let _ = VisitMut::visit(&mut stmt, &mut v);
@@ -400,6 +421,13 @@ mod ddl_tests {
             sql
         );
         assert!(!sql.contains("\"\"."), "{}", sql);
+    }
+
+    #[test]
+    fn rejects_returning_for_write_model() {
+        assert!(translate_sql("insert into t(id) values(1) returning id").is_err());
+        assert!(translate_sql("update t set v=1 returning id").is_err());
+        assert!(translate_sql("delete from t returning id").is_err());
     }
 
     #[test]

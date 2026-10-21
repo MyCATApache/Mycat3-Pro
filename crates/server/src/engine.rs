@@ -674,9 +674,13 @@ pub async fn proxy_local_inner(
         return None; // 透传到后端，真正切换连接当前库
     }
     if norm.starts_with("set ") {
-        // 本地应用（autocommit/names/@var 等状态镜像），随后透传后端
+        // 本地应用（autocommit/names/@var 等状态镜像），随后透传后端。
+        // Mycat 私有状态不能发给 PG/Oracle，否则会中止事务。
         let route = RouteResult::empty(StmtType::Set);
-        let _ = crate::commands::handle_local(state, ctx, tx, &route, sql).await;
+        let out = crate::commands::handle_local(state, ctx, tx, &route, sql).await;
+        if norm.starts_with("set @") || norm.contains("transaction_policy") {
+            return Some(convert_local(out));
+        }
         return None;
     }
     if let Some(ready) = state.ready_to_close_sql.read().as_ref() {

@@ -617,9 +617,30 @@ async fn test_e2e_admin_and_tx_inner() {
     assert!(env.logs[0].lock().iter().any(|s| s.contains("BEGIN")));
     assert!(env.logs[0].lock().iter().any(|s| s.contains("COMMIT")));
 
-    // SET / USE 本地
+    // SET autocommit=0 → 写 → SET autocommit=1 必须提交固定连接，
+    // 且不能把 MySQL 的 SET autocommit 发给后端。
     conn.query("set autocommit=0").await.unwrap();
+    env.logs[0].lock().clear();
+    env.logs[1].lock().clear();
+    conn.query("insert into orders (id, name) values (10, 'implicit')")
+        .await
+        .unwrap(); // 10%4=2 → ds1
     conn.query("set autocommit=1").await.unwrap();
+    {
+        let logs = env.logs[1].lock();
+        assert!(
+            logs.iter().any(|s| s.eq_ignore_ascii_case("COMMIT")),
+            "SET autocommit=1 必须提交隐式事务: {:?}",
+            *logs
+        );
+        assert!(
+            !logs.iter().any(|s| s.to_lowercase().contains("autocommit")),
+            "不应把 MySQL SET autocommit 透传给后端: {:?}",
+            *logs
+        );
+    }
+
+    // SET / USE 本地
     match conn.query("use db1").await {
         Ok(_) => {}
         Err(e) => panic!("use failed: {}", e),

@@ -417,7 +417,15 @@ pub async fn execute_route_proxy(
     let session = tx
         .proxy_conn_mut()
         .ok_or_else(|| ExecError::Conn("proxy connection missing".into()))?;
-    let out = session.query(sql, timeout).await;
+    let is_set = sql.trim_start().to_ascii_uppercase().starts_with("SET ");
+    let out = if is_set {
+        session.set_forward(sql).await.map(|_| BackendOutcome::Ok {
+            affected_rows: 0,
+            last_insert_id: 0,
+        })
+    } else {
+        session.query(sql, timeout).await
+    };
     // 事务状态跟踪（语义与后端一致；缓存命中判定/收尾用）
     let head = sql.trim_start();
     let upper = head.get(..16).unwrap_or(head).to_ascii_uppercase();

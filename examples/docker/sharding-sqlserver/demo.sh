@@ -101,6 +101,28 @@ SQL
 "${SQLCMD[@]}" -d db1 -Q "select count(*) as ddl_table from sys.objects where object_id = OBJECT_ID(N'db1.ddl_demo') and type = 'U'; select count(*) as ddl_index from sys.indexes where object_id = OBJECT_ID(N'db1.ddl_demo') and name = 'idx_ddl_name';"
 mysql_run -e "drop table ddl_demo;"
 
-section "6. HTTP 状态"
+section "6. 自增 / identity / 可空 BIT"
+mysql_run <<'SQL'
+drop table if exists id_auto_demo;
+create table id_auto_demo (
+  id bigint auto_increment primary key,
+  name varchar(32)
+) DBPARTITION BY hash(id) DBPARTITIONS 2 TBPARTITION BY hash(id) TBPARTITIONS 2;
+insert into id_auto_demo(name) values ('a'),('b'),('c'),('d');
+select count(*) as auto_rows from id_auto_demo;
+
+drop table if exists identity_demo;
+create table identity_demo (
+  id bigint auto_increment primary key,
+  flag bit null,
+  name varchar(32)
+);
+insert into identity_demo(name,flag) values ('x',1),('y',null);
+select count(*) as identity_rows, sum(flag) as flags from identity_demo;
+drop table id_auto_demo;
+drop table identity_demo;
+SQL
+
+section "7. HTTP 状态"
 curl -fsS "$HTTP/api/status" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(json.dumps({k:d[k] for k in ("mode","queries","datasources")},ensure_ascii=False,indent=2))'
 echo "演示结束；清理: docker compose down -v"

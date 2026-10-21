@@ -11,8 +11,8 @@ use crate::pool::PgEndpoint;
 /// 连接/查询错误。`Db` 为 SQL 级错误（连接可复用）；其余为连接级错误。
 #[derive(Debug, thiserror::Error)]
 pub enum PgError {
-    #[error("postgres error: {0}")]
-    Db(String),
+    #[error("postgres error {code}: {message}")]
+    Db { code: String, message: String },
     #[error("connection error: {0}")]
     Conn(String),
 }
@@ -27,7 +27,10 @@ impl PgError {
 /// tokio-postgres 错误 → PgError（DbError → SQL 级；其余 → 连接级）。
 fn classify(e: tokio_postgres::Error) -> PgError {
     if let Some(d) = e.as_db_error() {
-        PgError::Db(format!("{}: {}", d.code().code(), d.message()))
+        PgError::Db {
+            code: d.code().code().to_string(),
+            message: d.message().to_string(),
+        }
     } else {
         PgError::Conn(e.to_string())
     }
@@ -139,7 +142,15 @@ impl PgConnection {
                 SimpleQueryMessage::Row(row) => {
                     let mut r = Vec::with_capacity(columns.len());
                     for i in 0..columns.len() {
-                        r.push(row.get(i).map(|s| s.to_string()));
+                        let mut value = row.get(i).map(|s| s.to_string());
+                        if types.get(i) == Some(&Type::BOOL) {
+                            value = value.map(|v| match v.as_str() {
+                                "t" => "1".to_string(),
+                                "f" => "0".to_string(),
+                                _ => v,
+                            });
+                        }
+                        r.push(value);
                     }
                     rows.push(r);
                 }

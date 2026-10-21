@@ -4,7 +4,7 @@
 
 Mycat3 Pro 是对 [Mycat3](https://github.com/mycatparser/Mycat3)（Java 版分布式数据库中间件）的 Rust 语言重新实现。它保留了 Mycat3 的核心架构与配置格式（JSON 多文件配置可直接复用），以 tokio 异步运行时替代 Vert.x，以 sqlparser 替代 Druid/Calcite，提供 MySQL 协议代理、数据分片、读写分离、心跳高可用与可观测能力。
 
-- **374 个单元/集成测试全部通过**（协议编解码、17 种分片算法、SQL 路由、连接池、负载均衡、心跳切换、DDL 自动化、端到端全链路）
+- **379 个单元/集成测试全部通过**（协议编解码、17 种分片算法、SQL 路由、连接池、负载均衡、心跳切换、DDL 自动化、端到端全链路）
 - **DDL 配置自动化**：一条 `CREATE TABLE ... DBPARTITION BY hash(id) TBPARTITIONS 2 ...` 自动完成
   分片配置生成、物理建库建表、元数据热更新（与 Java 版 MycatRouterConfigOps 同语义）
 - **多协议同端口**（与 Java 版一致的字节级嗅探）：8066 端口同时服务 MySQL、PostgreSQL、SQL Server(TDS) 客户端；**真实客户端验证**：mysql CLI、psql 16（含扩展查询协议参数绑定）、sqlcmd/ODBC 同端口读写同一分片集群
@@ -105,7 +105,7 @@ server ──► sql ──► router ──► config
 ```bash
 cd "Mycat 3 Pro"
 cargo build --release          # 产物: target/release/mycat3-pro
-cargo test --workspace         # 374 个测试
+cargo test --workspace         # 379 个测试
 ```
 
 ### 启动（本机 MySQL 演示）
@@ -131,7 +131,7 @@ sqlcmd -S 127.0.0.1,8066 -U root -P 123456   # 需 encrypt=false（TDS 无 TLS�
 
 ### Docker
 
-官方镜像：`mycat/mycat3-pro:latest`（Docker Hub；`v0.3.2` / `0.3.2` 版本标签同 digest）。
+官方镜像：`mycat/mycat3-pro:latest`（Docker Hub；`v0.3.3` / `0.3.3` 版本标签同 digest）。
 
 ```bash
 # 直接使用发布镜像（分片模式）
@@ -237,7 +237,7 @@ Pro 版聚焦**透传路由模式**（Java 版 `HackRouter` 快速路径的超�
 ```bash
 cargo fmt --all          # 格式化
 cargo clippy --workspace # lint
-cargo test --workspace   # 测试（374 个）
+cargo test --workspace   # 测试（379 个）
 ```
 
 目录结构：

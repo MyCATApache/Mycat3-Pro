@@ -141,14 +141,28 @@ async fn handle_set(
         let compact: String = norm.chars().filter(|c| !c.is_whitespace()).collect();
         if compact.contains("autocommit=0") || compact.contains("autocommit=off") {
             ctx.autocommit = false;
-        } else if compact.contains("autocommit=1") || compact.contains("autocommit=on") {
-            ctx.autocommit = true;
-            // autocommit 恢复且无显式事务 → 结束语句级状态
-            if !tx.explicit_tx {
-                ctx.in_transaction = false;
-            }
+            // 由下一次语句的 need_tx 路径按后端发送 BEGIN；MySQL 也可直接
+            // 接受 SET autocommit=0，但不依赖它保证事务边界。
+            propagate_to_pinned(tx, sql).await;
+            return LocalOutcome::Ok;
         }
-        propagate_to_pinned(tx, sql).await;
+        if compact.contains("autocommit=1") || compact.contains("autocommit=on") {
+            // MySQL 语义：打开 autocommit 会提交当前事务。PG/Oracle/SQL Server
+            // 不能执行 MySQL 的 SET autocommit，必须走各自事务接口收口，
+            // 否则 PG 会中止事务、Oracle 会在归还连接时回滚。
+            if tx.explicit_tx || tx.pinned_count() > 0 || tx.xa_active() {
+                if let Err(e) = tx.commit(&state.xa_log).await {
+                    return LocalOutcome::Error {
+                        errno: 1105,
+                        sqlstate: "HY000".into(),
+                        message: format!("SET autocommit=1 commit failed: {}", e),
+                    };
+                }
+            }
+            ctx.autocommit = true;
+            ctx.in_transaction = false;
+            return LocalOutcome::Ok;
+        }
         return LocalOutcome::Ok;
     }
     // set names xxx

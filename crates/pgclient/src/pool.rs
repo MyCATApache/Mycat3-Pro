@@ -115,21 +115,48 @@ pub struct PgDataSourcePool {
     pub name: String,
     endpoint: PgEndpoint,
     max_con: usize,
+    min_con: usize,
+    idle_timeout: Duration,
+    init_sqls: Vec<String>,
     idle: Mutex<Vec<IdleConn>>,
     permits: Arc<Semaphore>,
     created: AtomicU64,
 }
 
 impl PgDataSourcePool {
-    pub fn new(name: &str, endpoint: PgEndpoint, max_con: usize) -> Arc<Self> {
+    pub fn new(
+        name: &str,
+        endpoint: PgEndpoint,
+        max_con: usize,
+        min_con: usize,
+        idle_timeout: Duration,
+        init_sqls: Vec<String>,
+    ) -> Arc<Self> {
+        let max_con = max_con.max(1);
         Arc::new(PgDataSourcePool {
             name: name.to_string(),
             endpoint,
-            max_con: max_con.max(1),
+            max_con,
+            min_con: min_con.min(max_con),
+            idle_timeout,
+            init_sqls,
             idle: Mutex::new(Vec::new()),
-            permits: Arc::new(Semaphore::new(max_con.max(1))),
+            permits: Arc::new(Semaphore::new(max_con)),
             created: AtomicU64::new(0),
         })
+    }
+
+    /// 预热 minCon 条空闲连接（失败不影响按需建连）。
+    pub async fn prewarm(self: &Arc<Self>) {
+        for _ in 0..self.min_con {
+            match self.acquire().await {
+                Ok(c) => drop(c),
+                Err(e) => {
+                    tracing::warn!(pool = %self.name, error = %e, "PostgreSQL pool prewarm failed");
+                    break;
+                }
+            }
+        }
     }
 
     /// 取出一条连接：空闲窗口内免 ping 复用；超窗 ping 校验；否则新建。
@@ -140,12 +167,23 @@ impl PgDataSourcePool {
             .acquire_owned()
             .await
             .map_err(|_| PgError::Conn("pool exhausted".into()))?;
-        let candidate = {
-            let mut idle = self.idle.lock();
-            idle.pop()
-                .map(|c| (c.conn, c.returned_at.elapsed() < PING_AFTER_IDLE))
-        };
-        if let Some((mut conn, fresh)) = candidate {
+        loop {
+            let candidate = {
+                let mut idle = self.idle.lock();
+                let now = Instant::now();
+                let mut candidate = None;
+                while let Some(c) = idle.pop() {
+                    if now.duration_since(c.returned_at) > self.idle_timeout {
+                        continue;
+                    }
+                    candidate = Some((c.conn, c.returned_at.elapsed() < PING_AFTER_IDLE));
+                    break;
+                }
+                candidate
+            };
+            let Some((mut conn, fresh)) = candidate else {
+                break;
+            };
             let alive = fresh || conn.ping().await;
             if alive {
                 return Ok(CheckedOutPgConn {
@@ -157,7 +195,10 @@ impl PgDataSourcePool {
             }
         }
         let endpoint = self.endpoint.clone();
-        let conn = PgConnection::connect(&endpoint).await?;
+        let mut conn = PgConnection::connect(&endpoint).await?;
+        for sql in &self.init_sqls {
+            conn.query(sql).await?;
+        }
         self.created.fetch_add(1, Ordering::Relaxed);
         Ok(CheckedOutPgConn {
             conn: Some(conn),
@@ -183,8 +224,11 @@ impl PgDataSourcePool {
 
     /// 池快照：(空闲, 可用额度, 累计创建)。供 show @@datasource。
     pub fn snapshot(&self) -> (usize, usize, u64) {
+        let mut idle = self.idle.lock();
+        let now = Instant::now();
+        idle.retain(|c| now.duration_since(c.returned_at) <= self.idle_timeout);
         (
-            self.idle.lock().len(),
+            idle.len(),
             self.permits.available_permits(),
             self.created.load(Ordering::Relaxed),
         )

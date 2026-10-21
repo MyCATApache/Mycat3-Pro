@@ -467,7 +467,15 @@ impl MssqlConnection {
                 ),
                 None => (0, 0),
             };
-            Ok::<(u64, u64), MssqlError>((affected, identity))
+            // MySQL's LAST_INSERT_ID() for a multi-row INSERT is the FIRST
+            // generated id; SCOPE_IDENTITY() is the last. Our auto-generated
+            // identity is IDENTITY(1,1), so derive the first when possible.
+            let first_identity = if affected > 1 {
+                identity.saturating_sub(affected - 1)
+            } else {
+                identity
+            };
+            Ok::<(u64, u64), MssqlError>((affected, first_identity))
         };
         match timeout {
             Some(t) => match tokio::time::timeout(t, fut).await {
@@ -613,7 +621,12 @@ pub fn map_column_type(t: ColumnType) -> u8 {
             field_type::VAR_STRING
         }
         DatetimeOffsetn | Guid => field_type::VAR_STRING,
-        Intn | Bitn | Floatn => field_type::VAR_STRING,
+        // Nullable BIT metadata is BITN but values decode as ColumnData::Bit.
+        Bitn => field_type::TINY,
+        // Fallback for unusual server-side widths; tiberius normally
+        // normalizes INTN/FLOATN to Int1..8/Float4/8 using the metadata length.
+        Intn => field_type::LONGLONG,
+        Floatn => field_type::DOUBLE,
     }
 }
 
@@ -882,6 +895,10 @@ mod tests {
         assert_eq!(
             map_column_type(ColumnType::BigVarBin),
             mycat3_protocol::consts::field_type::BLOB
+        );
+        assert_eq!(
+            map_column_type(ColumnType::Bitn),
+            mycat3_protocol::consts::field_type::TINY
         );
     }
 
