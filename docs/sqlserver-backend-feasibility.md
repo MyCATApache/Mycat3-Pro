@@ -549,10 +549,10 @@ SNAPSHOT 需数据库开启）。不能映射的显式报错，不能静默降�
   首 ID、可空 BIT 类型、PG/Oracle SQLSTATE/ORA 错误码映射、PG/Oracle 池
   `minCon`/`idleTimeout`/`initSqls`/连接超时、索引 repair。
 
-CI / 镜像验收（2026-10-21，v0.3.2）：
+CI / 镜像验收（2026-10-21，v0.3.3）：
 
-- GitHub Actions `CI` run `39606911776`：379 个单测 + SQL Server 2022 Compose 集成
-  （含逻辑 `CREATE TABLE ddl_demo`、索引校验、事务/XA 拒绝、三种前端）全部通过；
-- 镜像 `mycat/mycat3-pro:v0.3.2`、`0.3.2`、`latest` 已发布，多架构
-  manifest digest `sha256:066af41088348b218f23de47b6280a98e1208f0a1fe1d3b6ece4aa584f0c07ad`
+- GitHub Actions `CI` run `39631668072`：379 个单测 + SQL Server 2022 Compose 集成
+  （含逻辑 `CREATE TABLE`、索引校验、事务/XA 拒绝、三种前端、自增/identity/BIT）全部通过；
+- 镜像 `mycat/mycat3-pro:v0.3.3`、`0.3.3`、`latest` 已发布，多架构
+  manifest digest `sha256:f0f2a86e6b772d2ead9b971f7bb79e13fddfb791efedd7400796a2cbfb4d8a56`
   （`linux/amd64` + `linux/arm64`）；Docker Hub Verify 通过并同步简介。
