@@ -132,7 +132,7 @@ Mycat 会把 MySQL 反引号/标识符翻译成 Oracle 双引号并**保留大�
 | 物理建表 | 逻辑 `CREATE TABLE` 自动生成 Oracle DDL（identity/索引/幂等 PL/SQL）；init SQL 可选 |
 | 标识符 | 双引号、大小写敏感；见上一节 |
 | LIMIT | 翻译为 `ROWNUM` 包装 |
-| 多行 INSERT | 翻译为 `INSERT ALL` |
+| 多行 INSERT | 翻译为 `INSERT INTO ... SELECT ... FROM DUAL UNION ALL ...`（identity 逐行取值） |
 | 函数 | `IFNULL`→`NVL`、`NOW`→`CURRENT_TIMESTAMP`、`DATE_FORMAT`→`TO_CHAR` 等 |
 | 不支持 | `INSERT ... ON DUPLICATE KEY UPDATE`、`DROP ... IF EXISTS`、`DELETE ... LIMIT` 等显式报错 |
 | 心跳 | `select 1 from dual` |

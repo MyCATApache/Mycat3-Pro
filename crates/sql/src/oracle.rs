@@ -954,17 +954,28 @@ fn render_insert_all(insert: &Insert) -> DialectResult<Option<String>> {
                 .join(", ")
         )
     };
-    let mut out = String::from("INSERT ALL\n");
+    // INSERT INTO ... SELECT ... FROM DUAL UNION ALL ... 让 Oracle identity
+    // 为每一行分配独立值（INSERT ALL 在 identity 列上可能给所有行相同值）。
+    let mut selects = Vec::with_capacity(values.rows.len());
     for row in &values.rows {
         let vals = row
             .iter()
             .map(|e| e.to_string())
             .collect::<Vec<_>>()
             .join(", ");
-        out.push_str(&format!("  INTO {} {} VALUES ({})\n", table, cols, vals));
+        if vals.to_ascii_uppercase().contains("DEFAULT") {
+            return Err(DialectError::Unsupported(
+                "Oracle 多行 INSERT 中的 DEFAULT 暂不支持（请显式给出值）".into(),
+            ));
+        }
+        selects.push(format!("SELECT {} FROM \"DUAL\"", vals));
     }
-    out.push_str("SELECT 1 FROM \"DUAL\"");
-    Ok(Some(out))
+    Ok(Some(format!(
+        "INSERT INTO {} {} {}",
+        table,
+        cols,
+        selects.join(" UNION ALL ")
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -1109,9 +1120,10 @@ mod tests {
     #[test]
     fn test_insert_all() {
         let s = t("insert into orders (id, name) values (1, 'a'), (2, 'b'), (3, 'c')");
-        assert!(s.starts_with("INSERT ALL"), "{}", s);
-        assert_eq!(s.matches("INTO").count(), 3, "{}", s);
-        assert!(s.contains("SELECT 1 FROM \"DUAL\""), "{}", s);
+        assert!(s.starts_with("INSERT INTO"), "{}", s);
+        assert!(s.contains("UNION ALL"), "{}", s);
+        assert_eq!(s.matches("INTO").count(), 1, "{}", s);
+        assert!(s.contains("SELECT 1, 'a' FROM \"DUAL\""), "{}", s);
         // 单行保持普通 INSERT
         let s = t("insert into orders (id, name) values (1, 'a')");
         assert!(s.to_uppercase().starts_with("INSERT INTO"), "{}", s);

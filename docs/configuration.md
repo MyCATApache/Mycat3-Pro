@@ -311,7 +311,7 @@ AutoFunction 示例（`dbpartition by hash(id) tbpartition by hash(id) tbpartiti
 
 - 路由/分片/归并语义与 MySQL 后端完全一致（逻辑层无方言概念）；
 - 物理 SQL 按数据源 dbType 翻译：标识符 `"..."` 引用、`LIMIT`→ROWNUM 包装、
-  多行 INSERT→`INSERT ALL`、函数映射（IFNULL→NVL、NOW→CURRENT_TIMESTAMP 裸标识符、
+  多行 INSERT→`INSERT INTO ... SELECT ... FROM DUAL UNION ALL ...`、函数映射（IFNULL→NVL、NOW→CURRENT_TIMESTAMP 裸标识符、
   DATE_FORMAT→TO_CHAR、CONCAT→||、MD5→STANDARD_HASH、GROUP_CONCAT→LISTAGG 等，
   完整清单见 commands.md）；
 - 翻译不了的结构显式报错（`INSERT ... ON DUPLICATE KEY UPDATE`、`DROP ... IF EXISTS`、
