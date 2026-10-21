@@ -37,7 +37,7 @@ CI（tag 触发）见 `.github/workflows/release.yml`。
 | PostgreSQL 前端 | v3 协议：MD5 认证、简单查询、**真实扩展查询协议**（Parse/Bind/Describe/Execute，Java 版为 stub）、类型 OID 映射、事务状态字节 | `protocol.pg`（Pro 大幅增强） |
 | SQL Server (TDS) 前端 | TDS 7.2–7.4：PreLogin/Login7、SQL Batch、**sp_executesql RPC**（Java 版解析损坏）、NULL 保真、ODBC/JDBC 实测兼容 | `protocol.tds`（Pro 修复增强） |
 | 原生 MySQL 后端 | 异步原生协议客户端（非 JDBC），支持 DEPRECATE_EOF、分包重组 | `datasource` / vert.x 原生客户端 |
-| Oracle 后端 | 官方 rust-oracledb thin 驱动（协议成本归零）+ MySQL→Oracle 方言翻译（标识符/LIMIT→ROWNUM/INSERT ALL/函数/日期格式），支持 MySQL+Oracle 混合分片 | JDBC+jOOQ parsingDataSource |
+| Oracle 后端 | 官方 rust-oracledb thin 驱动（协议成本归零）+ MySQL→Oracle 方言翻译（标识符/LIMIT→ROWNUM/多行 INSERT→SELECT UNION ALL/函数/日期格式），支持 MySQL+Oracle 混合分片 | JDBC+jOOQ parsingDataSource |
 | PostgreSQL 后端 | tokio-postgres + 自研池；schema 分片；PG XA 2PC；**逻辑 DDL 自动建 schema/表/索引** | JDBC+jOOQ |
 | SQL Server 后端 | tiberius TDS 客户端 + 自研池；T-SQL 方言（TOP/OFFSET FETCH/函数）；SQL 认证/TLS；本地事务；**逻辑 DDL 自动建 schema/表/索引**；Always On 只读意图/延迟剔除；**单分片大结果端到端流式**；无 XA/MSDTC | JDBC+jOOQ |
 | 数据分片 | 17 种算法：Mod / Long / HashMod / MurmurHash 一致性环 / RangeMod / Pattern / PrefixPattern / FileMap / SubString / String / Date / Month / CRC32 预分槽(102400) / JumpConsistentHash / HotDate / AutoPartitionByLong / AutoFunction(hash/right_shift/yyyymm/mm/dd/...) | `router` |
@@ -227,7 +227,7 @@ Pro 版聚焦**透传路由模式**（Java 版 `HackRouter` 快速路径的超�
 
 已实现，且与 Java 版存在差异的关键能力：
 - XA 分布式事务：**MySQL + PostgreSQL**（2PC、决策 WAL、启动 `XA RECOVER`/`pg_prepared_xacts` 恢复；Oracle thin 驱动无 XA 接口，显式拒绝）
-- Oracle 后端（`dbType: "oracle"`）：官方 rust-oracledb thin 驱动 + MySQL→Oracle 方言翻译（标识符/LIMIT→ROWNUM/INSERT ALL/函数/日期格式），支持 MySQL+Oracle 混合分片、三前端接入、事务语义对齐；Oracle 物理建表支持自动 DDL（Oracle 方言/identity/索引）。详见 [oracle-backend-feasibility.md](docs/oracle-backend-feasibility.md) §8 与 [commands.md](docs/commands.md)
+- Oracle 后端（`dbType: "oracle"`）：官方 rust-oracledb thin 驱动 + MySQL→Oracle 方言翻译（标识符/LIMIT→ROWNUM/多行 INSERT→SELECT UNION ALL/函数/日期格式），支持 MySQL+Oracle 混合分片、三前端接入、事务语义对齐；Oracle 物理建表支持自动 DDL（Oracle 方言/identity/索引）。详见 [oracle-backend-feasibility.md](docs/oracle-backend-feasibility.md) §8 与 [commands.md](docs/commands.md)
 - PostgreSQL / SQL Server 后端、纯代理模式（`server.mode=proxy`）、MySQL/PostgreSQL 前端 TLS
 
 详细清单与有意修复的 Java 版缺陷见 [docs/compatibility.md](docs/compatibility.md)。
