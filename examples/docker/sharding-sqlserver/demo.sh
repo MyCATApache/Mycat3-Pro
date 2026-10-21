@@ -118,7 +118,7 @@ create table identity_demo (
   name varchar(32)
 );
 insert into identity_demo(name,flag) values ('x',1),('y',null);
-select count(*) as identity_rows, sum(flag) as flags from identity_demo;
+select count(*) as identity_rows, count(flag) as flags from identity_demo;
 drop table id_auto_demo;
 drop table identity_demo;
 SQL
