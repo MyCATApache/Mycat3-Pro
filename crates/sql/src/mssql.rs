@@ -24,10 +24,30 @@ pub type MssqlDialectResult<T> = Result<T, DialectError>;
 
 /// Translate MySQL-dialect SQL to T-SQL.
 pub fn translate_sql(sql: &str) -> MssqlDialectResult<String> {
+    if let Some((index, table)) = crate::route::parse_drop_index(sql) {
+        let (schema, table) = mssql_split_index_table(&table);
+        let target = if schema.is_empty() {
+            format!("[{}]", table.replace(']', "]]"))
+        } else {
+            format!(
+                "[{}].[{}]",
+                schema.replace(']', "]]"),
+                table.replace(']', "]]")
+            )
+        };
+        return Ok(format!(
+            "DROP INDEX IF EXISTS [{}] ON {}",
+            index.trim_matches('`').replace(']', "]]"),
+            target
+        ));
+    }
     let mut stmts =
         Parser::parse_sql(&MySqlDialect {}, sql).map_err(|e| DialectError::Parse(e.to_string()))?;
     let mut out = Vec::with_capacity(stmts.len());
     for mut stmt in stmts.drain(..) {
+        if let Statement::AlterTable { operations, .. } = &mut stmt {
+            translate_alter_ops(operations)?;
+        }
         precheck(&stmt)?;
         let mut limiter = LimitTransformer { err: None };
         let _ = VisitMut::visit(&mut stmt, &mut limiter);
@@ -48,6 +68,14 @@ pub fn translate_sql(sql: &str) -> MssqlDialectResult<String> {
         out.push(text);
     }
     Ok(out.join("; "))
+}
+
+fn mssql_split_index_table(table: &str) -> (&str, &str) {
+    let table = table.trim().trim_matches('`');
+    match table.rsplit_once('.') {
+        Some((s, t)) => (s.trim().trim_matches('`'), t.trim().trim_matches('`')),
+        None => ("", table),
+    }
 }
 
 fn precheck(stmt: &Statement) -> MssqlDialectResult<()> {
@@ -95,6 +123,62 @@ fn precheck(stmt: &Statement) -> MssqlDialectResult<()> {
             }
         }
         _ => {}
+    }
+    Ok(())
+}
+
+/// T-SQL `ALTER TABLE` 形状修正：MySQL 的 `ADD COLUMN` → T-SQL `ADD`，
+/// 并对本层无法安全改写的 MySQL 专有操作显式报错。
+fn translate_alter_ops(operations: &mut [AlterTableOperation]) -> MssqlDialectResult<()> {
+    for op in operations {
+        match op {
+            AlterTableOperation::AddColumn {
+                column_keyword,
+                if_not_exists,
+                column_def,
+                column_position,
+            } => {
+                if *if_not_exists {
+                    return Err(DialectError::Unsupported(
+                        "SQL Server 的 ADD COLUMN 不支持 IF NOT EXISTS".into(),
+                    ));
+                }
+                if column_position.is_some() {
+                    return Err(DialectError::Unsupported(
+                        "SQL Server 不支持 FIRST/AFTER 列位置（列顺序不影响查询）".into(),
+                    ));
+                }
+                if column_def.options.iter().any(|o| {
+                    matches!(&o.option, ColumnOption::DialectSpecific(tokens)
+                        if tokens.iter().any(|t| t.to_string().eq_ignore_ascii_case("AUTO_INCREMENT")))
+                }) {
+                    return Err(DialectError::Unsupported(
+                        "SQL Server 不能给已有表新增 IDENTITY 列（需重建列/表）".into(),
+                    ));
+                }
+                column_def.data_type = map_ddl_type(column_def.data_type.clone())?;
+                *column_keyword = false;
+            }
+            AlterTableOperation::ModifyColumn { .. }
+            | AlterTableOperation::ChangeColumn { .. }
+            | AlterTableOperation::AlterColumn { .. } => {
+                return Err(DialectError::Unsupported(
+                    "SQL Server 的 ALTER COLUMN 需显式类型/长度；当前暂不支持 MODIFY/CHANGE，请使用 ALTER TABLE ... ALTER COLUMN ... 的 T-SQL 写法".into(),
+                ))
+            }
+            AlterTableOperation::RenameColumn { .. } | AlterTableOperation::RenameTable { .. } => {
+                return Err(DialectError::Unsupported(
+                    "SQL Server 重命名列/表请使用 sp_rename；Mycat 的 RENAME TABLE 自动化已处理表重命名".into(),
+                ))
+            }
+            AlterTableOperation::AddConstraint(TableConstraint::Index { .. })
+            | AlterTableOperation::AddConstraint(TableConstraint::FulltextOrSpatial { .. }) => {
+                return Err(DialectError::Unsupported(
+                    "SQL Server 不支持 ALTER TABLE ADD INDEX；请使用 CREATE INDEX".into(),
+                ))
+            }
+            _ => {}
+        }
     }
     Ok(())
 }
@@ -635,6 +719,24 @@ mod ddl_tests {
         assert!(!sql.contains("UNIQUE KEY"), "{}", sql);
         assert!(
             sql.contains("CREATE INDEX [idx_b] ON [db1_0].[t] ([b], [a])"),
+            "{}",
+            sql
+        );
+    }
+
+    #[test]
+    fn translates_alter_add_column() {
+        let sql = translate_sql("ALTER TABLE t ADD COLUMN note VARCHAR(64)").unwrap();
+        assert!(sql.contains("ADD note NVARCHAR(64)"), "{}", sql);
+        assert!(!sql.contains("ADD COLUMN"), "{}", sql);
+        assert!(translate_sql("ALTER TABLE t MODIFY COLUMN note VARCHAR(64)").is_err());
+    }
+
+    #[test]
+    fn translates_drop_index_on_table() {
+        let sql = translate_sql("DROP INDEX idx ON db1.t").unwrap();
+        assert!(
+            sql.contains("DROP INDEX IF EXISTS [idx] ON [db1].[t]"),
             "{}",
             sql
         );

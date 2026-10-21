@@ -21,7 +21,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
-use crate::engine::{execute_sql, EngineError, EngineOutcome, EngineSession};
+use crate::engine::{
+    execute_sql, execute_sql_streaming, EngineError, EngineOutcome, EngineSession,
+    EngineStreamOutcome,
+};
 use crate::session::SessionContext;
 use crate::state::ServerState;
 
@@ -795,6 +798,9 @@ pub struct TdsFrontend {
     state: Arc<ServerState>,
     sess: EngineSession,
     packet_id: u8,
+    /// Packet id for a multi-packet streaming tabular message (EOM only on
+    /// the final packet).
+    stream_packet_id: u8,
     proc: Option<Arc<crate::state::ProcessInfo>>,
 }
 
@@ -824,6 +830,7 @@ pub async fn serve_tds_connection(
         state: state.clone(),
         sess: EngineSession::new(ctx),
         packet_id: 1,
+        stream_packet_id: 1,
         proc: None,
     };
     info!(conn_id, peer = %peer, "sqlserver(TDS) client connected");
@@ -1046,8 +1053,22 @@ impl TdsFrontend {
             return Ok(());
         }
         let sql = rewrite_tsql_top(sql);
-        match execute_sql(&self.state, &mut self.sess, &sql).await {
-            Ok(outcomes) => {
+        let first = sql
+            .trim_start()
+            .split(|c: char| c.is_whitespace() || c == '(')
+            .next()
+            .unwrap_or("")
+            .to_ascii_uppercase();
+        let streamable = matches!(first.as_str(), "SELECT" | "VALUES");
+        let result = if streamable {
+            execute_sql_streaming(&self.state, &mut self.sess, &sql).await
+        } else {
+            execute_sql(&self.state, &mut self.sess, &sql)
+                .await
+                .map(EngineStreamOutcome::Outcomes)
+        };
+        match result {
+            Ok(EngineStreamOutcome::Outcomes(outcomes)) => {
                 let mut out = Vec::new();
                 let last = outcomes.len().saturating_sub(1);
                 for (i, outcome) in outcomes.iter().enumerate() {
@@ -1078,6 +1099,44 @@ impl TdsFrontend {
                     }
                 }
                 self.send(TDS_TABULAR_RESULT, &out).await?;
+            }
+            Ok(EngineStreamOutcome::Stream(mut stream)) => {
+                let names: Vec<String> = stream.columns.iter().map(|c| c.name.clone()).collect();
+                self.stream_packet_id = 1;
+                let mut head = Vec::new();
+                token_colmetadata(&names, &mut head);
+                self.send_stream_chunk(&head, false).await?;
+                let mut batch = Vec::new();
+                loop {
+                    match stream.next_row().await {
+                        Ok(Some(row)) => {
+                            token_row(&row, &mut batch);
+                            if batch.len() >= 64 * 1024 {
+                                self.send_stream_chunk(&batch, false).await?;
+                                batch.clear();
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            self.state.stats.incr_error();
+                            if !batch.is_empty() {
+                                self.send_stream_chunk(&batch, false).await?;
+                                batch.clear();
+                            }
+                            let mut out = Vec::new();
+                            token_error(
+                                e.errno as u32,
+                                &format!("[{}] {}", e.sqlstate, e.message),
+                                &mut out,
+                            );
+                            token_done(0, 0, 0, &mut out);
+                            self.send_stream_chunk(&out, true).await?;
+                            return Ok(());
+                        }
+                    }
+                }
+                token_done(0x0010, 0xC1, stream.rows_read, &mut batch);
+                self.send_stream_chunk(&batch, true).await?;
             }
             Err(e) => {
                 self.state.stats.incr_error();
@@ -1150,6 +1209,37 @@ impl TdsFrontend {
             payload.append(&mut rest);
         }
         Ok((ptype, payload))
+    }
+
+    /// Send one part of a single TDS tabular message. Only the final part
+    /// carries EOM, so COLMETADATA/rows/DONE can be written incrementally
+    /// instead of materialising the whole result.
+    async fn send_stream_chunk(&mut self, payload: &[u8], last: bool) -> Result<(), TdsError> {
+        let mut offset = 0usize;
+        loop {
+            let chunk = std::cmp::min(PACKET_SIZE - 8, payload.len().saturating_sub(offset));
+            let is_last = offset + chunk >= payload.len();
+            let mut header = [0u8; 8];
+            header[0] = TDS_TABULAR_RESULT;
+            header[1] = if last && is_last { EOM } else { 0 };
+            header[2..4].copy_from_slice(&((chunk + 8) as u16).to_be_bytes());
+            header[6] = self.stream_packet_id;
+            self.stream_packet_id = self.stream_packet_id.wrapping_add(1);
+            self.socket.write_all(&header).await?;
+            self.socket
+                .write_all(&payload[offset..offset + chunk])
+                .await?;
+            offset += chunk;
+            if is_last {
+                break;
+            }
+        }
+        self.socket.flush().await?;
+        self.state.stats.add_out((payload.len() + 8) as u64);
+        if last {
+            self.stream_packet_id = 1;
+        }
+        Ok(())
     }
 
     async fn send(&mut self, ptype: u8, payload: &[u8]) -> Result<(), TdsError> {

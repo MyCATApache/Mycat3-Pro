@@ -159,7 +159,7 @@ SQL Server 也可以作为 Mycat 的**后端**（不是本目录的 TDS 前端�
 
 - 基于 `tiberius` TDS 客户端 + 自研连接池；
 - 支持 SQL 认证、TLS、schema 分片、常用 T-SQL 方言、本地事务；
-- 物理表手工创建；XA/MSDTC 未实现，`transactionType=xa` 显式拒绝；
+- 后端物理表可由逻辑 `CREATE TABLE` 自动创建；XA/MSDTC 未实现，`transactionType=xa` 显式拒绝；
 - 完整示例：[`sharding-sqlserver`](../sharding-sqlserver/README.md)；
 - 代价与限制：[SQL Server 后端接入评估](../../../docs/sqlserver-backend-feasibility.md)。
 

@@ -370,7 +370,7 @@ fn check_table_route(
 
 /// `DROP INDEX [IF EXISTS] idx ON [schema.]tbl` 文本级解析。
 /// 返回 (索引名, 表名)；非该语法返回 None。
-fn parse_drop_index(sql: &str) -> Option<(String, String)> {
+pub(crate) fn parse_drop_index(sql: &str) -> Option<(String, String)> {
     let s = sql.trim();
     let upper = s.to_uppercase();
     if !upper.starts_with("DROP INDEX ") {

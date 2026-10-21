@@ -37,6 +37,22 @@ pub type DialectResult<T> = Result<T, DialectError>;
 
 /// 将 MySQL 方言 SQL 翻译为 Oracle 方言 SQL。
 pub fn translate_sql(sql: &str) -> DialectResult<String> {
+    if let Some((index, table)) = crate::route::parse_drop_index(sql) {
+        let (schema, _) = ora_split_index_table(&table);
+        let index_name = if schema.is_empty() {
+            format!("{}", ora_quote(index.trim_matches('`')))
+        } else {
+            format!(
+                "{}.{}",
+                ora_quote(schema),
+                ora_quote(index.trim_matches('`'))
+            )
+        };
+        return Ok(format!(
+            "BEGIN\n  EXECUTE IMMEDIATE 'DROP INDEX {}';\nEXCEPTION\n  WHEN OTHERS THEN\n    IF SQLCODE != -1418 THEN RAISE; END IF;\nEND;",
+            index_name.replace('\'', "''")
+        ));
+    }
     let mut stmts =
         Parser::parse_sql(&MySqlDialect {}, sql).map_err(|e| DialectError::Parse(e.to_string()))?;
     if stmts.len() != 1 {
@@ -1158,5 +1174,356 @@ mod tests {
         // 路由层生成的物理 SQL 形态
         let s = t("SELECT * FROM db2_0.orders_0 WHERE id = 3");
         assert_eq!(s, "SELECT * FROM \"db2_0\".\"orders_0\" WHERE \"id\" = 3");
+    }
+}
+
+fn ora_split_index_table(table: &str) -> (&str, &str) {
+    let table = table.trim().trim_matches('`');
+    match table.rsplit_once('.') {
+        Some((s, t)) => (s.trim().trim_matches('`'), t.trim().trim_matches('`')),
+        None => ("", table),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Physical DDL translation
+// ---------------------------------------------------------------------------
+
+/// Convert a MySQL `CREATE TABLE` template into an idempotent Oracle PL/SQL
+/// block (ORA-00955 ignored), including MySQL `KEY/INDEX` definitions.
+pub fn translate_ddl(sql: &str, schema: &str, table: &str) -> DialectResult<String> {
+    let mut stmts =
+        Parser::parse_sql(&MySqlDialect {}, sql).map_err(|e| DialectError::Parse(e.to_string()))?;
+    if stmts.len() != 1 {
+        return Err(DialectError::Unsupported(
+            "Oracle 物理建表只接受单条 CREATE TABLE".into(),
+        ));
+    }
+    let mut stmt = stmts.pop().unwrap();
+    let Statement::CreateTable(ct) = &mut stmt else {
+        return Err(DialectError::Unsupported(
+            "Oracle 物理建表只支持 CREATE TABLE".into(),
+        ));
+    };
+    ct.if_not_exists = false;
+    ct.or_replace = false;
+    ct.engine = None;
+    ct.default_charset = None;
+    ct.collation = None;
+    ct.table_properties.clear();
+    ct.with_options.clear();
+    ct.auto_increment_offset = None;
+    ct.comment = None;
+    ct.partition_by = None;
+    ct.cluster_by = None;
+    ct.options = None;
+
+    for col in &mut ct.columns {
+        col.data_type = map_ora_ddl_type(col.data_type.clone())?;
+        col.collation = None;
+        col.name = ora_quote(&col.name.value);
+        let mut keep = Vec::with_capacity(col.options.len());
+        for opt in col.options.drain(..) {
+            match &opt.option {
+                ColumnOption::OnUpdate(_) => {
+                    return Err(DialectError::Unsupported(
+                        "Oracle 不支持 ON UPDATE 列选项".into(),
+                    ))
+                }
+                ColumnOption::CharacterSet(_) | ColumnOption::Comment(_) => {}
+                ColumnOption::Generated { .. }
+                | ColumnOption::Materialized(_)
+                | ColumnOption::Ephemeral(_)
+                | ColumnOption::Alias(_)
+                | ColumnOption::Options(_) => {
+                    return Err(DialectError::Unsupported(
+                        "Oracle 不支持的列表达式/生成列选项".into(),
+                    ))
+                }
+                _ => keep.push(opt),
+            }
+        }
+        col.options = keep;
+    }
+
+    let mut secondary_indexes = Vec::new();
+    let mut constraints = Vec::with_capacity(ct.constraints.len());
+    for constraint in std::mem::take(&mut ct.constraints) {
+        match constraint {
+            TableConstraint::PrimaryKey {
+                name,
+                index_name,
+                index_type: _,
+                columns,
+                index_options: _,
+                characteristics: _,
+            } => constraints.push(TableConstraint::PrimaryKey {
+                name: name.or(index_name),
+                index_name: None,
+                index_type: None,
+                columns: columns.into_iter().map(|c| ora_quote(&c.value)).collect(),
+                index_options: vec![],
+                characteristics: None,
+            }),
+            TableConstraint::Unique {
+                name,
+                index_name,
+                index_type_display: _,
+                index_type: _,
+                columns,
+                index_options: _,
+                characteristics: _,
+                nulls_distinct: _,
+            } => constraints.push(TableConstraint::Unique {
+                name: name.or(index_name),
+                index_name: None,
+                index_type_display: KeyOrIndexDisplay::None,
+                index_type: None,
+                columns: columns.into_iter().map(|c| ora_quote(&c.value)).collect(),
+                index_options: vec![],
+                characteristics: None,
+                nulls_distinct: NullsDistinctOption::None,
+            }),
+            TableConstraint::ForeignKey {
+                name,
+                columns,
+                foreign_table,
+                referred_columns,
+                on_delete,
+                on_update,
+                characteristics,
+            } => constraints.push(TableConstraint::ForeignKey {
+                name,
+                columns: columns.into_iter().map(|c| ora_quote(&c.value)).collect(),
+                foreign_table,
+                referred_columns: referred_columns
+                    .into_iter()
+                    .map(|c| ora_quote(&c.value))
+                    .collect(),
+                on_delete,
+                on_update,
+                characteristics,
+            }),
+            TableConstraint::Check { .. } => constraints.push(constraint),
+            TableConstraint::Index {
+                name,
+                columns,
+                index_type: _,
+                ..
+            } => {
+                let index_name = name.unwrap_or_else(|| {
+                    let cols = columns
+                        .iter()
+                        .map(|c| c.value.trim_matches('`'))
+                        .collect::<Vec<_>>()
+                        .join("_");
+                    Ident::new(
+                        format!("IX_{}_{}", table, cols)
+                            .chars()
+                            .take(128)
+                            .collect::<String>(),
+                    )
+                });
+                let cols = columns
+                    .iter()
+                    .map(|c| format!("{}", ora_quote(c.value.trim_matches('`'))))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let index_qualified = if schema.is_empty() {
+                    format!("{}", ora_quote(&index_name.value))
+                } else {
+                    format!("{}.{}", ora_quote(schema), ora_quote(&index_name.value))
+                };
+                secondary_indexes.push(format!(
+                    "CREATE INDEX {} ON {} ({})",
+                    index_qualified,
+                    ora_qualified(schema, table),
+                    cols
+                ));
+            }
+            TableConstraint::FulltextOrSpatial { .. } => {
+                return Err(DialectError::Unsupported(
+                    "Oracle 物理建表不支持 FULLTEXT/SPATIAL 索引".into(),
+                ))
+            }
+        }
+    }
+    ct.constraints = constraints;
+    ct.name = if schema.is_empty() {
+        ObjectName(vec![ora_quote(table)])
+    } else {
+        ObjectName(vec![ora_quote(schema), ora_quote(table)])
+    };
+
+    let create_sql = stmt
+        .to_string()
+        .replace("AUTO_INCREMENT", "GENERATED BY DEFAULT AS IDENTITY");
+    let mut block = String::from("BEGIN\n");
+    block.push_str(&ora_exec_block(&create_sql, &[-955]));
+    for sql in &secondary_indexes {
+        block.push_str(&ora_exec_block(sql, &[-955, -1408]));
+    }
+    block.push_str("END;");
+    Ok(block)
+}
+
+fn ora_quote(value: &str) -> Ident {
+    let mut id = Ident::new(value.replace('"', "\"\""));
+    id.quote_style = Some('"');
+    id
+}
+
+fn ora_qualified(schema: &str, table: &str) -> String {
+    if schema.is_empty() {
+        format!("{}", ora_quote(table))
+    } else {
+        format!("{}.{}", ora_quote(schema), ora_quote(table))
+    }
+}
+
+fn ora_exec_block(sql: &str, ignore_codes: &[i32]) -> String {
+    let escaped = sql.replace('\'', "''");
+    let cond = ignore_codes
+        .iter()
+        .map(|c| format!("SQLCODE != {}", c))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    format!(
+        "  BEGIN\n    EXECUTE IMMEDIATE '{}';\n  EXCEPTION\n    WHEN OTHERS THEN\n      IF {} THEN RAISE; END IF;\n  END;\n",
+        escaped, cond
+    )
+}
+
+fn ora_len(len: Option<CharacterLength>, default: u64) -> String {
+    match len {
+        Some(CharacterLength::IntegerLength { length, .. }) => length.to_string(),
+        Some(CharacterLength::Max) | None => default.to_string(),
+    }
+}
+
+fn ora_type(name: &str, args: Vec<String>) -> DataType {
+    DataType::Custom(ObjectName(vec![Ident::new(name)]), args)
+}
+
+fn map_ora_ddl_type(t: DataType) -> DialectResult<DataType> {
+    use DataType::*;
+    Ok(match t {
+        TinyInt(x) => {
+            if x == Some(1) {
+                ora_type("NUMBER", vec!["1".into()])
+            } else {
+                ora_type("NUMBER", vec!["3".into()])
+            }
+        }
+        UnsignedTinyInt(_) => ora_type("NUMBER", vec!["3".into()]),
+        SmallInt(_) | Int2(_) => ora_type("NUMBER", vec!["5".into()]),
+        UnsignedSmallInt(_) | UnsignedInt2(_) => ora_type("NUMBER", vec!["5".into()]),
+        MediumInt(_) | Int(_) | Integer(_) | Int4(_) => ora_type("NUMBER", vec!["10".into()]),
+        UnsignedMediumInt(_) | UnsignedInt(_) | UnsignedInteger(_) | UnsignedInt4(_) => {
+            ora_type("NUMBER", vec!["10".into()])
+        }
+        BigInt(_) | Int8(_) | UnsignedInt8(_) => ora_type("NUMBER", vec!["19".into()]),
+        UnsignedBigInt(_) => ora_type("NUMBER", vec!["20".into()]),
+        Float(_) | Float4 | Real => ora_type("BINARY_FLOAT", vec![]),
+        Double | DoublePrecision | Float8 | Float64 => ora_type("BINARY_DOUBLE", vec![]),
+        Decimal(info) | Numeric(info) | Dec(info) => match info {
+            ExactNumberInfo::None => ora_type("NUMBER", vec![]),
+            ExactNumberInfo::Precision(p) => ora_type("NUMBER", vec![p.to_string()]),
+            ExactNumberInfo::PrecisionAndScale(p, s) => {
+                ora_type("NUMBER", vec![p.to_string(), s.to_string()])
+            }
+        },
+        Varchar(len) | Nvarchar(len) | CharacterVarying(len) | CharVarying(len) => {
+            ora_type("VARCHAR2", vec![ora_len(len, 4000)])
+        }
+        Char(len) | Character(len) => ora_type("CHAR", vec![ora_len(len, 1)]),
+        String(len) => ora_type(
+            "VARCHAR2",
+            vec![ora_len(
+                len.map(|length| CharacterLength::IntegerLength { length, unit: None }),
+                4000,
+            )],
+        ),
+        Text
+        | TinyText
+        | MediumText
+        | LongText
+        | Clob(_)
+        | CharacterLargeObject(_)
+        | CharLargeObject(_)
+        | JSON
+        | JSONB => ora_type("CLOB", vec![]),
+        Blob(_) | TinyBlob | MediumBlob | LongBlob | Bytea => ora_type("BLOB", vec![]),
+        Binary(len) | Varbinary(len) | Bytes(len) => match len {
+            Some(n) if n <= 2000 => ora_type("RAW", vec![n.to_string()]),
+            _ => ora_type("BLOB", vec![]),
+        },
+        Bool | Boolean => ora_type("NUMBER", vec!["1".into()]),
+        Date => Date,
+        Datetime(_) | Datetime64(_, _) | Timestamp(_, _) => ora_type("TIMESTAMP", vec![]),
+        Time(_, _) => return Err(DialectError::Unsupported(
+            "Oracle 无 MySQL TIME 语义（INTERVAL 与 TIME 行为不同），请改用 TIMESTAMP 或 VARCHAR2"
+                .into(),
+        )),
+        Uuid => ora_type("VARCHAR2", vec!["36".into()]),
+        Enum(_, _) | Set(_) => {
+            return Err(DialectError::Unsupported(
+                "Oracle 不支持 ENUM/SET 列（请改用 VARCHAR2 + CHECK）".into(),
+            ))
+        }
+        other => {
+            return Err(DialectError::Unsupported(format!(
+                "Oracle 物理建表暂不支持类型: {}",
+                other
+            )))
+        }
+    })
+}
+
+#[cfg(test)]
+mod ddl_tests {
+    use super::*;
+
+    #[test]
+    fn translates_create_table() {
+        let sql = translate_ddl(
+            "CREATE TABLE IF NOT EXISTS __TABLE__ (id BIGINT PRIMARY KEY, name VARCHAR(64), created DATETIME, amount DECIMAL(12,2))",
+            "DB1_0",
+            "ORDERS_0",
+        )
+        .unwrap();
+        assert!(
+            sql.contains("CREATE TABLE \"DB1_0\".\"ORDERS_0\""),
+            "{}",
+            sql
+        );
+        assert!(sql.contains("NUMBER(19)"), "{}", sql);
+        assert!(sql.contains("VARCHAR2(64)"), "{}", sql);
+        assert!(sql.contains("TIMESTAMP"), "{}", sql);
+        assert!(sql.contains("EXCEPTION"), "{}", sql);
+    }
+
+    #[test]
+    fn translates_identity_and_index() {
+        let sql = translate_ddl(
+            "CREATE TABLE t (id BIGINT AUTO_INCREMENT PRIMARY KEY, a INT, KEY idx_a (a))",
+            "DB1",
+            "T",
+        )
+        .unwrap();
+        assert!(sql.contains("GENERATED BY DEFAULT AS IDENTITY"), "{}", sql);
+        assert!(sql.contains("CREATE INDEX \"DB1\".\"idx_a\""), "{}", sql);
+    }
+
+    #[test]
+    fn empty_schema_uses_table_only() {
+        let sql = translate_ddl("CREATE TABLE t (id BIGINT)", "", "t").unwrap();
+        assert!(sql.contains("CREATE TABLE \"t\""), "{}", sql);
+        assert!(!sql.contains("\"\"."), "{}", sql);
+    }
+
+    #[test]
+    fn rejects_enum() {
+        assert!(translate_ddl("CREATE TABLE t (s ENUM('a','b'))", "DB1", "T").is_err());
     }
 }

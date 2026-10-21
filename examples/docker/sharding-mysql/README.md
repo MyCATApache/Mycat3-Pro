@@ -249,7 +249,7 @@ init/
 
 物理表由 `init/shard0.sql`、`init/shard1.sql` 预先创建。MySQL 后端支持 DDL 自动化
 （`CREATE TABLE` 可扇出建表），但本示例用初始化 SQL 保证可重复、可审计；
-PG/Oracle 后端的物理表必须手工创建，见对应示例。
+PG/Oracle/SQL Server 后端同样支持自动物理 DDL，init 脚本是可选的。
 
 ## 与其它后端的关键差异
 

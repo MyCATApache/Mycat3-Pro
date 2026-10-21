@@ -26,7 +26,10 @@ pub use hint::{parse_hint, Hint};
 pub use meta::{MetaError, Metadata, SchemaMeta, TableMeta};
 pub use mssql::translate_ddl as translate_mssql_ddl;
 pub use mssql::translate_sql as translate_mssql_sql;
-pub use oracle::{translate_sql as translate_oracle_sql, DialectError};
+pub use oracle::{
+    translate_ddl as translate_oracle_ddl, translate_sql as translate_oracle_sql, DialectError,
+};
+pub use pg::translate_ddl as translate_pg_ddl;
 pub use pg::translate_sql as translate_pg_sql;
 pub use route::{
     analyse, parse_rename_table, BackendTask, LimitSpec, MergeOp, MergePlan, OrderKey, RouteResult,

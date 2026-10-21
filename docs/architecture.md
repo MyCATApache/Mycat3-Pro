@@ -134,8 +134,9 @@ UTF-16LE 语义、Google Jump Consistent Hash、CRC-32、1024 槽段表）均按
   （对应 JDBC autocommit=true）；事务内连接按数据源固定，`BEGIN` 为本地无操作
   （Oracle 隐式开事务），COMMIT/ROLLBACK 走驱动接口，SAVEPOINT 直传；连接归还池时
   回滚残留事务（净化）。
-- 心跳：`select 1 from dual`（SINGLE_NODE 语义）；DDL 自动化仅对 MySQL 后端生成物理 DDL，
-  Oracle 分片表由 DBA 手工创建。
+- 心跳：`select 1 from dual`（SINGLE_NODE 语义）；逻辑 `CREATE TABLE` 自动生成 Oracle
+  物理 DDL（类型/identity/索引/幂等 PL/SQL），`DROP TABLE`/`repairPhysicalTable`/`RENAME`
+  按 Oracle 方言执行。
 - TDS 前端适配：`SELECT [ALL|DISTINCT] TOP (n)` 在 TDS 会话层改写为 `LIMIT n`
   （多语句批中 LIMIT 归属首语句；PERCENT/WITH TIES 不支持）。
 - 边界：不支持 ANO 原生加密（TLS 可用）；跨 MySQL+Oracle 混合事务不保证原子性（无 XA）。
@@ -148,9 +149,10 @@ UTF-16LE 语义、Google Jump Consistent Hash、CRC-32、1024 槽段表）均按
 - 事务：`SET autocommit=0`→`BEGIN TRAN`、`1`→`COMMIT`；`BEGIN/COMMIT/ROLLBACK`、
   `SAVEPOINT`→`SAVE TRANSACTION`；事务控制使用 SQL batch（避免 sp_executesql 的事务计数错误）。
 - 物理模型：一个 datasource 固定一个 database，`schemaName` 表示 SQL Server schema；
-  物理表由 DBA/init SQL 手工创建；DDL 自动化尚未启用。
-- 边界：**XA/MSDTC 未实现**（`transactionType=xa` 显式拒绝）；Windows/Kerberos/Entra 认证、
-  Always On 副本读路由未实现；SQL Server 前端 TDS 与 SQL Server 后端是不同方向。
+  逻辑 `CREATE TABLE` 自动翻译为 T-SQL 建 schema/表/索引；`DROP TABLE`、
+  `repairPhysicalTable`、`RENAME TABLE` 均按 T-SQL 执行；单分片读支持端到端流式。
+- 边界：**XA/MSDTC 未实现**（`transactionType=xa` 显式拒绝）；Windows/Kerberos/Entra 认证
+  未实现；Always On 已支持只读意图/延迟剔除；SQL Server 前端 TDS 与 SQL Server 后端是不同方向。
 
 ## 5. 线程/任务栈说明
 

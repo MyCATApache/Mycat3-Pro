@@ -14,9 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "镜像版本标签（不含 v，例如 0.3.1）"
+        description: "镜像版本标签（不含 v，例如 0.3.2）"
         required: true
-        default: "0.3.1"
+        default: "0.3.2"
       push_latest:
         description: "同时更新 :latest"
         type: boolean
@@ -65,8 +65,8 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern=v{{version}}
-            type=raw,value=${{ github.event.inputs.version || '0.3.1' }},enable=${{ github.event_name == 'workflow_dispatch' }}
-            type=raw,value=v${{ github.event.inputs.version || '0.3.1' }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=${{ github.event.inputs.version || '0.3.2' }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=v${{ github.event.inputs.version || '0.3.2' }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=raw,value=latest,enable=${{ github.event_name == 'push' || inputs.push_latest }}
 
       - name: Build and push (multi-arch)

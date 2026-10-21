@@ -3,7 +3,7 @@
 > **实施状态（2026-10）**：已按本文方案落地 `crates/mssql`（`tiberius` 0.13 +
 > 自研连接池）、`BackendPool::Mssql`、T-SQL 方言层和 `sharding-sqlserver` Compose 示例。
 > 已支持 SQL 认证/TLS、schema 分片、广播/单表、常用类型、`TOP`/`OFFSET FETCH`、本地事务/
-> `SET autocommit`/保存点；**DDL 自动化、Always On 只读意图/延迟剔除已实现**；
+> `SET autocommit`/保存点；**DDL 自动化、Always On 只读意图/延迟剔除、端到端流式已实现**；
 > **XA/MSDTC、Windows 集成认证仍未实现**。下文保留评估时的判断与估算，作为后续扩展依据。
 >
 > 已用 SQL Server 2022 容器验证：分片/广播/单表、MySQL/PostgreSQL/TDS 三种前端、
@@ -37,7 +37,7 @@
 | `crates/server/src/commands.rs` | `show @@datasource` 合并池快照 | 合并 Mssql 池 |
 | `crates/server/src/main.rs` | `check` 按 dbType 校验 URL | 增加 SQL Server URL 解析/校验 |
 | `crates/server/src/executor.rs` | 结果统一为 `ResultSet` | 复用文本行模型，无需改归并 |
-| `crates/server/src/ddl.rs` | 物理 DDL 仅 MySQL 自动生成 | 一期跳过（手工 DDL），二期加 T-SQL 生成 |
+| `crates/server/src/ddl.rs` | 物理 DDL MySQL/SQL Server/PostgreSQL/Oracle 方言分支 | 已接入 |
 
 现有 PG/Oracle 后端已经把“结果字符串行 → MySQL 文本载荷”的路径打通，
 归并、广播、三前端回写可以零改动复用；主要成本在 **TDS 客户端** 和 **T-SQL 方言**。
@@ -153,7 +153,7 @@ SQL Server 默认大小写不敏感，但 Mycat 会做标识符引用转换。�
 
 - 物理表名、schema 名在配置和 DBA 建表中保持一致；
 - 方言层把 MySQL 反引号转换为 `[...]`，并转义 `]` → `]]`；
-- 物理表由 DBA/init SQL 创建（一期不自动生成 DDL）。
+- 物理表可自动生成 DDL（`translate_ddl`），init SQL 可选。
 
 ---
 
@@ -267,25 +267,30 @@ SQL Server 后端应走“类型化行 → 字符串行 → MySQL 文本载荷�
 
 ---
 
-### 6.1 大结果集与流式边界
+### 6.1 大结果集与端到端流式（已实现）
 
-当前 `MssqlConnection::query_rows` 已按 `QueryItem` **增量解码**：tiberius 的
-`Row` 一到达就转成 Mycat 文本行，不再先 `into_results()` 保存全部 `Row`
-再复制一份文本行，峰值内存约减半。
+`MssqlConnection::query_rows` 仍保留增量解码（元数据/行一到即转文本行，
+避免 `into_results()` 的双份峰值内存）。
 
-端到端协议级流式（读一行、写一行给客户端）尚未启用：Mycat 的
-`BackendOutcome::Rows(ResultSet)` 是归并、SQL 缓存、三种前端共用的物化模型，
-单条 SQL Server 查询可能参与跨分片归并/缓存写入。要做真正的流式，需要：
+SQL Server **端到端协议级流式**已落地：
 
-1. 新增 `BackendOutcome::RowStream(BoxStream<Row>)`，保留列定义；
-2. engine 仅在“单分片、无 merge、无缓存、非事务固定连接”时返回流；
-3. MySQL/PG/TDS 前端逐行编码并分块 flush（现有 `write_result_set` 已有
-   64KB 分块 flush，可复用）；
-4. 流式结果不写 SQL 缓存（或改为旁路落盘）；
-5. 多分片 ORDER BY/聚合仍物化归并。
+- `MssqlPool::stream_query` 在后台任务中持有连接，按 `QueryItem` 逐行读取，
+  通过容量 128 的有界 channel 施加背压；消费者消失/超时会丢弃连接（事务/残留
+  数据不回到池）。
+- `executor::execute_route_stream` 仅对“单任务、SELECT、无 merge、无 hint、
+  autocommit、非显式事务、SQL Server 数据源”返回 `StreamingResult`；其他情况
+  回退物化路径。
+- 三种前端均已接入：
+  - MySQL 文本协议：列定义后逐行写包，64KB flush；
+  - PostgreSQL 简单查询：RowDescription 后逐行 DataRow，64KB 批次 flush；
+  - TDS SQL Batch：COLMETADATA 后逐行 ROW token，EOM 只在最终 DONE 包，
+    64KB 批次 flush。
+- SQL 缓存命中在进入流式前完成；流式结果不写入缓存。
+- 事务内固定连接、多分片归并、MySQL 二进制协议/PG 扩展协议仍走物化路径，
+  语义不变（只影响性能，不影响结果）。
 
-这是跨 executor/frontend 的改动（估计 500–800 行），风险高于本阶段收益；
-当前以增量解码 + 前端 64KB 分块写作为折中。
+实测：SQL Server 2022 上 5000 行结果经 MySQL CLI / psql / sqlcmd 三种前端
+分别接收完整 5000 行，`DEBUG` 日志均确认 `SQL Server streaming result started`。
 
 ---
 
@@ -506,7 +511,21 @@ SNAPSHOT 需数据库开启）。不能映射的显式报错，不能静默降�
 9. **`LAST_INSERT_ID` 额外往返**：INSERT 批次内追加
    `@@ROWCOUNT + SCOPE_IDENTITY()`，单次往返返回；多行取最后 ID，文档标注。
 
-结果：上述集成用例全部通过；`cargo test --workspace` 共 **362** 个测试通过。
+结果：上述集成用例全部通过；`cargo test --workspace` 共 **374** 个测试通过。
+
+2026-10-21 增补（跨后端物理 DDL + 端到端流式）：
+
+- PostgreSQL 16：`repairPhysicalTable` 自动创建 `db1_0/db1_1` schema、4 个分片物理表、
+  `dict` 广播表、普通表与索引；逻辑 `CREATE TABLE pg_demo` 自动建表/索引；
+  `DROP TABLE` 物理删除；`RENAME TABLE` 按 PG 方言重命名；`ALTER ... ADD COLUMN`、
+  `CREATE/DROP INDEX ... ON` 均通过。
+- Oracle Free 23ai：自动物理建表（`NUMBER/VARCHAR2/TIMESTAMP`、identity、索引、
+  幂等 PL/SQL）、`DROP TABLE`、`RENAME TABLE`、`repairPhysicalTable` 通过；
+  默认 `schemaName` 使用数据源连接用户。
+- SQL Server 2022：逻辑 `ALTER TABLE ADD COLUMN`、`CREATE/DROP INDEX ... ON`、
+  `RENAME TABLE`（`sp_rename`）通过。
+- 流式：5000 行结果经 MySQL CLI / psql / sqlcmd 三种前端完整接收，
+  DEBUG 日志均确认进入 `SQL Server streaming result started` 路径。
 
 CI / 镜像验收（2026-10-20）：
 

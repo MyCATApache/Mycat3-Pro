@@ -1065,6 +1065,19 @@ impl Frontend {
                 .map_err(OneErr::Io)?;
             return Ok(0);
         }
+        // 单分片 SQL Server 读：走端到端流式（事务外；多分片/归并仍物化）
+        if let Some(stream) =
+            crate::executor::execute_route_stream(&self.state, &mut self.ctx, &mut self.tx, route)
+                .await
+                .map_err(|e| {
+                    let (errno, sqlstate, msg) = e.to_packet_parts();
+                    OneErr::Packet(build_error(errno, &sqlstate, &msg))
+                })?
+        {
+            let n = self.write_stream_result(stream, more).await?;
+            self.tx.close_statement_state(self.ctx.autocommit);
+            return Ok(n);
+        }
         let resp = execute_route(&self.state, &mut self.ctx, &mut self.tx, route)
             .await
             .map_err(|e| {
@@ -1205,6 +1218,56 @@ impl Frontend {
         }
         self.flush().await?;
         Ok(())
+    }
+
+    /// 逐行写 SQL Server 流式结果；每 64KB 主动 flush，峰值内存与首字节延迟
+    /// 不再受结果总大小影响。中途错误按 MySQL ERR 包返回。
+    async fn write_stream_result(
+        &mut self,
+        mut stream: crate::executor::StreamingResult,
+        more: bool,
+    ) -> Result<u64, OneErr> {
+        let deprecate = self.ctx.deprecate_eof;
+        let ncols = stream.column_count;
+        {
+            let mut w = self.writer();
+            w.write_column_count(ncols);
+            for payload in &stream.column_def_payloads {
+                w.write_column_def_raw(payload);
+            }
+            if !deprecate {
+                w.write_eof(false);
+            }
+        }
+        self.flush().await.map_err(OneErr::Io)?;
+        let mut count = 0u64;
+        loop {
+            let row = match stream.next_row().await {
+                Ok(Some(row)) => row,
+                Ok(None) => break,
+                Err(e) => {
+                    let (errno, sqlstate, msg) = e.to_parts();
+                    return Err(OneErr::Packet(build_error(errno, &sqlstate, &msg)));
+                }
+            };
+            count += 1;
+            let values: Vec<Option<&[u8]>> = row
+                .iter()
+                .map(|v| v.as_ref().map(|s| s.as_bytes()))
+                .collect();
+            let mut w = self.writer();
+            w.write_text_row(&values);
+            if w.out.len() >= 64 * 1024 {
+                drop(w);
+                self.flush().await.map_err(OneErr::Io)?;
+            }
+        }
+        {
+            let mut w = self.writer();
+            w.write_eof(more);
+        }
+        self.flush().await.map_err(OneErr::Io)?;
+        Ok(count)
     }
 
     /// 写后端结果集（原始载荷透传 + DEPRECATE_EOF 语义）。

@@ -19,7 +19,7 @@ RUN cargo build --release --locked -p mycat3-server
 
 # ---------- 运行阶段 ----------
 FROM debian:bookworm-slim
-ARG VERSION=0.3.1
+ARG VERSION=0.3.2
 LABEL org.opencontainers.image.title="Mycat3 Pro" \
       org.opencontainers.image.description="MySQL/PostgreSQL/TDS protocol middleware with sharding and proxy modes; MySQL/Oracle/PostgreSQL/SQL Server backends" \
       org.opencontainers.image.url="https://github.com/MyCATApache/Mycat3-Pro" \

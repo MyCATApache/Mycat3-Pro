@@ -6,10 +6,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 
 use crate::config::MssqlEndpoint;
-use crate::conn::MssqlConnection;
+use crate::conn::{MssqlColumn, MssqlConnection, MssqlStreamEvent};
 use crate::error::{MssqlError, MssqlResult};
 
 pub const PING_AFTER_IDLE: Duration = Duration::from_secs(1);
@@ -36,6 +36,60 @@ impl Drop for CheckedOutMssqlConn {
     fn drop(&mut self) {
         if let Some(conn) = self.conn.take() {
             self.pool.return_conn(conn, self.broken);
+        }
+    }
+}
+
+/// A pull-based row stream backed by a bounded channel.
+pub struct MssqlRowStream {
+    rx: mpsc::Receiver<MssqlStreamEvent>,
+    header: Option<Vec<MssqlColumn>>,
+    pending_rows: std::collections::VecDeque<Vec<Option<String>>>,
+    done: bool,
+}
+
+impl MssqlRowStream {
+    /// Wait for (and return) the first result set's column metadata.
+    pub async fn ready(&mut self) -> MssqlResult<&[MssqlColumn]> {
+        if self.header.is_none() {
+            loop {
+                match self.rx.recv().await {
+                    Some(MssqlStreamEvent::Columns(cols)) => {
+                        self.header = Some(cols);
+                        break;
+                    }
+                    Some(MssqlStreamEvent::Row(row)) => self.pending_rows.push_back(row),
+                    Some(MssqlStreamEvent::Error(e)) => return Err(e),
+                    None => {
+                        self.done = true;
+                        return Err(MssqlError::Conn(
+                            "SQL Server stream ended before column metadata".into(),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(self.header.as_deref().unwrap_or_default())
+    }
+
+    /// Fetch the next row (`None` = clean end of stream).
+    pub async fn next_row(&mut self) -> MssqlResult<Option<Vec<Option<String>>>> {
+        if let Some(row) = self.pending_rows.pop_front() {
+            return Ok(Some(row));
+        }
+        if self.done {
+            return Ok(None);
+        }
+        loop {
+            match self.rx.recv().await {
+                Some(MssqlStreamEvent::Row(row)) => return Ok(Some(row)),
+                Some(MssqlStreamEvent::Columns(_)) => continue,
+                Some(MssqlStreamEvent::Error(e)) => return Err(e),
+                None => {
+                    self.done = true;
+                    return Ok(None);
+                }
+            }
         }
     }
 }
@@ -154,6 +208,37 @@ impl MssqlPool {
         }
     }
 
+    /// Start a streaming SELECT. Rows are decoded by a background task into a
+    /// bounded channel, which applies backpressure end-to-end. The checked-out
+    /// connection is owned by that task and is returned/discarded when it ends.
+    pub async fn stream_query(
+        self: &Arc<Self>,
+        sql: String,
+        timeout: Option<Duration>,
+        capacity: usize,
+    ) -> MssqlResult<MssqlRowStream> {
+        let mut checked = self.acquire().await?;
+        let (tx, rx) = mpsc::channel(capacity.max(1));
+        tokio::spawn(async move {
+            let r = checked.conn().stream_rows_to(&sql, timeout, tx).await;
+            match r {
+                Ok(true) => {}
+                Ok(false) => checked.mark_broken(),
+                Err(e) => {
+                    if e.is_conn_level() {
+                        checked.mark_broken();
+                    }
+                }
+            }
+        });
+        Ok(MssqlRowStream {
+            rx,
+            header: None,
+            pending_rows: std::collections::VecDeque::new(),
+            done: false,
+        })
+    }
+
     /// (idle, available permits, created connections)
     pub fn snapshot(&self) -> (usize, usize, u64) {
         let mut idle = self.idle.lock();
@@ -177,5 +262,56 @@ impl MssqlPool {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conn::MssqlColumn;
+    use mycat3_protocol::consts::field_type;
+
+    #[tokio::test]
+    async fn stream_ready_buffers_early_row_then_ends() {
+        let (tx, rx) = mpsc::channel(4);
+        let cols = vec![MssqlColumn {
+            name: "id".into(),
+            mysql_type: field_type::LONGLONG,
+        }];
+        tx.send(MssqlStreamEvent::Columns(cols.clone()))
+            .await
+            .unwrap();
+        tx.send(MssqlStreamEvent::Row(vec![Some("1".into())]))
+            .await
+            .unwrap();
+        drop(tx);
+        let mut stream = MssqlRowStream {
+            rx,
+            header: None,
+            pending_rows: std::collections::VecDeque::new(),
+            done: false,
+        };
+        assert_eq!(stream.ready().await.unwrap()[0].name, "id");
+        assert_eq!(
+            stream.next_row().await.unwrap().unwrap()[0].as_deref(),
+            Some("1")
+        );
+        assert!(stream.next_row().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn stream_ready_surfaces_error() {
+        let (tx, rx) = mpsc::channel(2);
+        tx.send(MssqlStreamEvent::Error(MssqlError::Timeout("x".into())))
+            .await
+            .unwrap();
+        drop(tx);
+        let mut stream = MssqlRowStream {
+            rx,
+            header: None,
+            pending_rows: std::collections::VecDeque::new(),
+            done: false,
+        };
+        assert!(stream.ready().await.is_err());
     }
 }

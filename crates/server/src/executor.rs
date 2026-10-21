@@ -13,13 +13,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mycat3_client::{decode_text_row, ResultSet};
+use mycat3_mssql::{MssqlColumn, MssqlRowStream};
 use mycat3_protocol::packets::build_text_row;
+use mycat3_protocol::packets::ColumnDef;
 use mycat3_replica::PhysicsInstance;
-use mycat3_sql::{MergeOp, MergePlan, RouteResult};
+use mycat3_sql::{MergeOp, MergePlan, RouteResult, StmtType};
 use thiserror::Error;
 
 use crate::backend::{
-    translate_for_backend, BackendError, BackendOutcome, BackendPool, BackendSession,
+    mssql_err, translate_for_backend, BackendError, BackendOutcome, BackendPool, BackendSession,
 };
 use crate::session::SessionContext;
 use crate::state::ServerState;
@@ -115,6 +117,126 @@ pub enum ExecResponse {
     Rows(ResultSet),
     /// 无需响应（不应出现；前端兜底）
     Empty,
+}
+
+/// 单分片、无归并的 SQL Server 流式结果。
+///
+/// 列元数据在返回前已就绪；行通过有界 channel 逐行获取，后台任务持有
+/// 连接并负责归还/丢弃。`ActiveGuard` 让负载均衡的 active 计数覆盖整个
+/// 流式读取周期。
+pub struct StreamingResult {
+    pub columns: Vec<ColumnDef>,
+    pub column_def_payloads: Vec<Vec<u8>>,
+    pub column_count: usize,
+    stream: MssqlRowStream,
+    _guard: Option<ActiveGuard>,
+}
+
+impl StreamingResult {
+    pub async fn next_row(&mut self) -> Result<Option<Vec<Option<String>>>, BackendError> {
+        self.stream.next_row().await.map_err(mssql_err)
+    }
+}
+
+fn mssql_stream_columns(columns: &[MssqlColumn]) -> (Vec<ColumnDef>, Vec<Vec<u8>>) {
+    let defs: Vec<ColumnDef> = columns
+        .iter()
+        .map(|c| {
+            let mut def = ColumnDef::new(&c.name, c.mysql_type);
+            if c.mysql_type == mycat3_protocol::consts::field_type::BLOB {
+                def.charset = mycat3_protocol::consts::charset::BINARY as u16;
+            }
+            def
+        })
+        .collect();
+    let payloads = defs.iter().map(|c| c.encode()).collect();
+    (defs, payloads)
+}
+
+/// 尝试为单分片 SQL Server 读语句建立流式结果。
+///
+/// 返回 `Ok(None)` 表示不满足流式条件（多分片/归并/事务/非 SQL Server），
+/// 调用方应走原有物化路径。事务内连接固定语义、多分片归并和缓存仍走物化。
+pub async fn execute_route_stream(
+    state: &Arc<ServerState>,
+    ctx: &mut SessionContext,
+    tx: &mut TransactionSession,
+    route: &RouteResult,
+) -> Result<Option<StreamingResult>, ExecError> {
+    if route.tasks.len() != 1
+        || route.stmt_type != StmtType::Select
+        || route.merge.is_some()
+        || route.hint.is_some()
+        || !ctx.autocommit
+        || ctx.in_transaction
+        || tx.explicit_tx
+    {
+        return Ok(None);
+    }
+    let task = &route.tasks[0];
+    let sticky = tx.nearness_get(&task.target_name).map(String::from);
+    let ds = match sticky {
+        Some(ds)
+            if state
+                .replica()
+                .instance(&ds)
+                .map(|i| i.is_alive())
+                .unwrap_or(false) =>
+        {
+            ds
+        }
+        _ => {
+            let ds = state
+                .replica()
+                .resolve(&task.target_name, false, false, false)
+                .ok_or_else(|| ExecError::NoDatasource(task.target_name.clone()))?;
+            tx.nearness_put(&task.target_name, &ds);
+            ds
+        }
+    };
+    if tx.contains(&ds) {
+        return Ok(None);
+    }
+    let pool = match BackendPool::get(state, &ds)? {
+        BackendPool::Mssql(p) => p,
+        _ => return Ok(None),
+    };
+    let sql =
+        translate_for_backend(state, &ds, &task.sql).map_err(|e| ExecError::Conn(e.to_string()))?;
+    let timeout = exec_timeout(state, route);
+    let mut stream = pool
+        .stream_query(sql, timeout, 128)
+        .await
+        .map_err(|e| ExecError::from(mssql_err(e)))?;
+    let columns = stream
+        .ready()
+        .await
+        .map_err(|e| ExecError::from(mssql_err(e)))?
+        .to_vec();
+    let (defs, payloads) = mssql_stream_columns(&columns);
+    tracing::debug!(datasource = %ds, columns = defs.len(), "SQL Server streaming result started");
+    Ok(Some(StreamingResult {
+        column_count: defs.len(),
+        columns: defs,
+        column_def_payloads: payloads,
+        stream,
+        _guard: Some(ActiveGuard::new(state.replica().instance(&ds))),
+    }))
+}
+
+fn exec_timeout(state: &Arc<ServerState>, route: &RouteResult) -> Option<Duration> {
+    let t = state.config().server.server.execute_timeout;
+    let configured = if t > 0 {
+        Some(Duration::from_millis(t))
+    } else {
+        None
+    };
+    route
+        .hint
+        .as_ref()
+        .and_then(|h| h.execute_timeout_ms)
+        .map(Duration::from_millis)
+        .or(configured)
 }
 
 /// 执行一条已路由语句。

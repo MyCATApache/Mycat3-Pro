@@ -17,7 +17,7 @@ docker build -t mycat/mycat3-pro:latest .
 | [`proxy-mysql`](proxy-mysql/README.md) | `proxy` | MySQL | MySQL / PG / TDS | SQL 结果缓存、SQL 拦截、慢 SQL、会话固定连接、HTTP API |
 | [`sharding-mysql`](sharding-mysql/README.md) | `local` | MySQL × 2 | MySQL / PG / TDS | 取模/枚举/月份/广播/单表、XA 2PC |
 | [`sharding-postgresql`](sharding-postgresql/README.md) | `local` | PostgreSQL × 2 | PostgreSQL / MySQL / TDS | PG schema 分片、大小写、手工 DDL、PG XA |
-| [`sharding-oracle`](sharding-oracle/README.md) | `local` | Oracle Free（双 schema） | MySQL / PG / TDS | 大写标识符/引号列、NLS 日期、无 XA、手工物理表 |
+| [`sharding-oracle`](sharding-oracle/README.md) | `local` | Oracle Free（双 schema） | MySQL / PG / TDS | 大写标识符/引号列、NLS 日期、无 XA、自动物理 DDL |
 | [`sharding-sqlserver`](sharding-sqlserver/README.md) | `local` | SQL Server 2022 | MySQL / PG / TDS | T-SQL 方言、SQL 认证/TLS、手工 DDL、无 XA |
 | [`tds-frontend`](tds-frontend/README.md) | `local` | MySQL | **SQL Server (TDS)** / MySQL | sqlcmd/T-SQL 接入、`TOP n` 改写、协议无关性 |
 | [`performance`](performance/README.md) | `local` | MySQL（双 schema） | MySQL | 线程/超时/连接池/缓存参数与轻量对比 |

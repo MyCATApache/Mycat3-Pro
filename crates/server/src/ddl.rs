@@ -406,6 +406,25 @@ pub fn parse_drds_suffix(suffix: &str) -> DrdsPartition {
     part
 }
 
+/// 未显式指定物理 schema 时的默认值：Oracle 的 schema 是数据库用户，
+/// 逻辑库名（db1）不是 schema；使用连接用户（空限定）作为默认。
+fn default_physical_schema(
+    state: &std::sync::Arc<ServerState>,
+    target: &str,
+    logical_schema: &str,
+) -> String {
+    let replica = state.replica();
+    if let Some(ds) = replica.resolve(target, true, false, false) {
+        if let Some(cfg) = replica.datasource_config(&ds) {
+            if cfg.db_type.eq_ignore_ascii_case("oracle") {
+                // Oracle 的 schema 就是数据库用户；用连接用户保证查询与建表一致。
+                return cfg.user.to_ascii_uppercase();
+            }
+        }
+    }
+    logical_schema.to_string()
+}
+
 /// `CREATE TABLE` 主流程。
 pub async fn create_table(
     state: &std::sync::Arc<ServerState>,
@@ -467,6 +486,8 @@ pub async fn create_table(
         })?;
         s.target_name.clone()
     };
+    let default_physical_schema =
+        default_physical_schema(state, &schema_default_target, &schema_name);
 
     // 4. 生成表配置
     let full_logical_ddl = body.clone() + &rebuild_drds_suffix(&drds);
@@ -486,7 +507,7 @@ pub async fn create_table(
                 .iter()
                 .map(|t| LocalityConfig {
                     target_name: t.clone(),
-                    schema_name: Some(schema_name.clone()),
+                    schema_name: Some(default_physical_schema.clone()),
                     table_name: Some(table_name.clone()),
                 })
                 .collect(),
@@ -514,7 +535,7 @@ pub async fn create_table(
             create_table_sql: Some(full_logical_ddl.clone()),
             locality: Some(LocalityConfig {
                 target_name: schema_default_target.clone(),
-                schema_name: Some(schema_name.clone()),
+                schema_name: Some(default_physical_schema.clone()),
                 table_name: Some(table_name.clone()),
             }),
         })
@@ -814,8 +835,15 @@ async fn create_physical_node(
     let ds_cfg = replica
         .datasource_config(&ds)
         .ok_or_else(|| EngineError::general(format!("datasource {} not found", ds)))?;
-    if ds_cfg.db_type.eq_ignore_ascii_case("mssql") {
+    let db_type = ds_cfg.db_type.to_ascii_lowercase();
+    if matches!(db_type.as_str(), "mssql" | "sqlserver" | "mssqlserver") {
         return create_mssql_physical_node(&ds_cfg, node, ddl_template).await;
+    }
+    if matches!(db_type.as_str(), "postgresql" | "postgres" | "pgsql") {
+        return create_pg_physical_node(&ds_cfg, node, ddl_template).await;
+    }
+    if db_type == "oracle" {
+        return create_oracle_physical_node(&ds_cfg, node, ddl_template).await;
     }
     let mut conn = state
         .conn_mgr
@@ -845,19 +873,148 @@ async fn create_physical_node(
     Ok(())
 }
 
-/// 该物理节点对应的数据源是否 SQL Server。
-fn physical_node_is_mssql(
+/// 该物理节点对应的数据源类型（小写归一）；解析失败返回 None。
+fn physical_node_db_type(
     state: &std::sync::Arc<ServerState>,
     node: &mycat3_router::IndexDataNode,
-) -> bool {
+) -> Option<String> {
     let replica = state.replica();
-    let Some(ds) = replica.resolve(&node.target_name, true, false, false) else {
-        return false;
-    };
+    let ds = replica.resolve(&node.target_name, true, false, false)?;
     replica
         .datasource_config(&ds)
-        .map(|c| c.db_type.eq_ignore_ascii_case("mssql"))
-        .unwrap_or(false)
+        .map(|c| c.db_type.to_ascii_lowercase())
+}
+
+fn quote_double(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn quote_bracket(value: &str) -> String {
+    format!("[{}]", value.replace(']', "]]"))
+}
+
+/// PostgreSQL 物理建表：确保 schema 存在，把 MySQL CREATE TABLE 翻译为 PG DDL。
+async fn create_pg_physical_node(
+    ds_cfg: &DatasourceConfig,
+    node: &mycat3_router::IndexDataNode,
+    ddl_template: &str,
+) -> Result<(), EngineError> {
+    let ep = mycat3_pgclient::parse_pg_jdbc_url(&ds_cfg.url, &ds_cfg.user, &ds_cfg.password)
+        .map_err(|e| EngineError::general(format!("postgres datasource: {}", e)))?;
+    let mut conn = mycat3_pgclient::PgConnection::connect(&ep)
+        .await
+        .map_err(|e| EngineError::general(format!("postgres connect failed: {}", e)))?;
+    if !node.schema_name.is_empty() {
+        let sql = format!(
+            "CREATE SCHEMA IF NOT EXISTS {}",
+            quote_double(&node.schema_name)
+        );
+        conn.query(&sql)
+            .await
+            .map_err(|e| EngineError::general(format!("postgres create schema: {}", e)))?;
+    }
+    let ddl = mycat3_sql::translate_pg_ddl(ddl_template, &node.schema_name, &node.table_name)
+        .map_err(|e| EngineError::general(format!("postgres DDL translate: {}", e)))?;
+    conn.query(&ddl)
+        .await
+        .map_err(|e| EngineError::general(format!("postgres create table: {}", e)))?;
+    Ok(())
+}
+
+/// Oracle 物理建表：schema 即数据源用户；DDL 为幂等 PL/SQL 块。
+async fn create_oracle_physical_node(
+    ds_cfg: &DatasourceConfig,
+    node: &mycat3_router::IndexDataNode,
+    ddl_template: &str,
+) -> Result<(), EngineError> {
+    let cfg = mycat3_oracle::config_from_jdbc_url(&ds_cfg.url, &ds_cfg.user, &ds_cfg.password)
+        .map_err(|e| EngineError::general(format!("oracle datasource: {}", e)))?;
+    let mut conn = mycat3_oracle::connect_direct(cfg)
+        .await
+        .map_err(|e| EngineError::general(format!("oracle connect failed: {}", e)))?;
+    let ddl = mycat3_sql::translate_oracle_ddl(ddl_template, &node.schema_name, &node.table_name)
+        .map_err(|e| EngineError::general(format!("oracle DDL translate: {}", e)))?;
+    conn.execute_tx(&ddl)
+        .await
+        .map_err(|e| EngineError::general(format!("oracle create table: {}", e)))?;
+    Ok(())
+}
+
+/// PostgreSQL/Oracle 物理删表。
+async fn drop_pg_physical_node(
+    state: &std::sync::Arc<ServerState>,
+    node: &mycat3_router::IndexDataNode,
+) -> Result<(), EngineError> {
+    let replica = state.replica();
+    let ds = replica
+        .resolve(&node.target_name, true, false, false)
+        .ok_or_else(|| {
+            EngineError::general(format!("no datasource for target {}", node.target_name))
+        })?;
+    let ds_cfg = replica
+        .datasource_config(&ds)
+        .ok_or_else(|| EngineError::general(format!("datasource {} not found", ds)))?;
+    let ep = mycat3_pgclient::parse_pg_jdbc_url(&ds_cfg.url, &ds_cfg.user, &ds_cfg.password)
+        .map_err(|e| EngineError::general(format!("postgres datasource: {}", e)))?;
+    let mut conn = mycat3_pgclient::PgConnection::connect(&ep)
+        .await
+        .map_err(|e| EngineError::general(format!("postgres connect failed: {}", e)))?;
+    let table = if node.schema_name.is_empty() {
+        quote_double(&node.table_name)
+    } else {
+        format!(
+            "{}.{}",
+            quote_double(&node.schema_name),
+            quote_double(&node.table_name)
+        )
+    };
+    conn.query(&format!("DROP TABLE IF EXISTS {}", table))
+        .await
+        .map_err(|e| EngineError::general(format!("postgres drop table: {}", e)))?;
+    Ok(())
+}
+
+async fn drop_oracle_physical_node(
+    state: &std::sync::Arc<ServerState>,
+    node: &mycat3_router::IndexDataNode,
+) -> Result<(), EngineError> {
+    let replica = state.replica();
+    let ds = replica
+        .resolve(&node.target_name, true, false, false)
+        .ok_or_else(|| {
+            EngineError::general(format!("no datasource for target {}", node.target_name))
+        })?;
+    let ds_cfg = replica
+        .datasource_config(&ds)
+        .ok_or_else(|| EngineError::general(format!("datasource {} not found", ds)))?;
+    let cfg = mycat3_oracle::config_from_jdbc_url(&ds_cfg.url, &ds_cfg.user, &ds_cfg.password)
+        .map_err(|e| EngineError::general(format!("oracle datasource: {}", e)))?;
+    let mut conn = mycat3_oracle::connect_direct(cfg)
+        .await
+        .map_err(|e| EngineError::general(format!("oracle connect failed: {}", e)))?;
+    let table = if node.schema_name.is_empty() {
+        quote_double(&node.table_name)
+    } else {
+        format!(
+            "{}.{}",
+            quote_double(&node.schema_name),
+            quote_double(&node.table_name)
+        )
+    };
+    let drop_sql = format!("DROP TABLE {}", table);
+    let block = format!(
+        "BEGIN
+  EXECUTE IMMEDIATE '{}';
+EXCEPTION
+  WHEN OTHERS THEN
+    IF SQLCODE != -942 THEN RAISE; END IF;
+END;",
+        drop_sql.replace('\'', "''")
+    );
+    conn.execute_tx(&block)
+        .await
+        .map_err(|e| EngineError::general(format!("oracle drop table: {}", e)))?;
+    Ok(())
 }
 
 /// SQL Server 物理删表（`DROP TABLE IF EXISTS [schema].[table]`）。
@@ -1110,18 +1267,22 @@ pub async fn drop_table(
 
     // 物理删除（幂等，错误吞掉 —— Java 同）
     for node in &nodes {
-        let r = if physical_node_is_mssql(state, node) {
-            drop_mssql_physical_node(state, node).await
-        } else {
-            let sql = if node.schema_name.is_empty() {
-                format!("DROP TABLE IF EXISTS `{}`", node.table_name)
-            } else {
-                format!(
-                    "DROP TABLE IF EXISTS `{}`.`{}`",
-                    node.schema_name, node.table_name
-                )
-            };
-            execute_on_target(state, &node.target_name, &sql).await
+        let db_type = physical_node_db_type(state, node).unwrap_or_default();
+        let r = match db_type.as_str() {
+            "mssql" | "sqlserver" | "mssqlserver" => drop_mssql_physical_node(state, node).await,
+            "postgresql" | "postgres" | "pgsql" => drop_pg_physical_node(state, node).await,
+            "oracle" => drop_oracle_physical_node(state, node).await,
+            _ => {
+                let sql = if node.schema_name.is_empty() {
+                    format!("DROP TABLE IF EXISTS `{}`", node.table_name)
+                } else {
+                    format!(
+                        "DROP TABLE IF EXISTS `{}`.`{}`",
+                        node.schema_name, node.table_name
+                    )
+                };
+                execute_on_target(state, &node.target_name, &sql).await
+            }
         };
         if let Err(e) = r {
             tracing::warn!(node = %node.unique_name(), "physical drop failed: {}", e);
@@ -1798,10 +1959,19 @@ async fn repair_physical_tables(state: &std::sync::Arc<ServerState>) -> Result<(
                     Some(c) => c,
                     None => continue,
                 };
-                if !ds_cfg.db_type.eq_ignore_ascii_case("mysql")
-                    && !ds_cfg.db_type.eq_ignore_ascii_case("mssql")
-                {
-                    continue; // Oracle/PostgreSQL 物理表由 DBA 手工管理
+                let db_type = ds_cfg.db_type.to_ascii_lowercase();
+                if !matches!(
+                    db_type.as_str(),
+                    "mysql"
+                        | "mssql"
+                        | "sqlserver"
+                        | "mssqlserver"
+                        | "postgresql"
+                        | "postgres"
+                        | "pgsql"
+                        | "oracle"
+                ) {
+                    continue;
                 }
                 let node = mycat3_router::IndexDataNode {
                     target_name: target,
@@ -2006,9 +2176,10 @@ async fn execute_on_target_in_schema(
         .datasource_config(&ds)
         .ok_or_else(|| EngineError::general(format!("datasource {} missing", ds)))?;
     if !ds_cfg.db_type.eq_ignore_ascii_case("mysql") {
-        tracing::warn!(datasource = %ds, db_type = %ds_cfg.db_type, target,
-            "view DDL skipped for non-MySQL datasource (create views manually)");
-        return Ok(());
+        return Err(EngineError::general(format!(
+            "视图物理 DDL 暂不支持 {} 后端（当前仅 MySQL）；请手工创建/删除视图",
+            ds_cfg.db_type
+        )));
     }
     let mut conn = state
         .conn_mgr
@@ -2025,6 +2196,105 @@ async fn execute_on_target_in_schema(
         .map_err(|e| EngineError::general(e.to_string()))?;
     conn.quit().await;
     let _ = r;
+    Ok(())
+}
+
+/// 按数据源方言执行物理表重命名。
+async fn rename_physical_node(
+    state: &std::sync::Arc<ServerState>,
+    target: &str,
+    schema: &str,
+    old: &str,
+    new: &str,
+) -> Result<(), EngineError> {
+    let replica = state.replica();
+    let ds = replica
+        .resolve(target, true, false, false)
+        .ok_or_else(|| EngineError::general(format!("no datasource for target {}", target)))?;
+    let ds_cfg = replica
+        .datasource_config(&ds)
+        .ok_or_else(|| EngineError::general(format!("datasource {} missing", ds)))?;
+    match ds_cfg.db_type.to_ascii_lowercase().as_str() {
+        "mssql" | "sqlserver" | "mssqlserver" => {
+            let ep =
+                mycat3_mssql::parse_mssql_jdbc_url(&ds_cfg.url, &ds_cfg.user, &ds_cfg.password)
+                    .map_err(|e| EngineError::general(format!("mssql datasource: {}", e)))?;
+            let mut conn = mycat3_mssql::MssqlConnection::connect(&ep)
+                .await
+                .map_err(|e| EngineError::general(format!("mssql connect failed: {}", e)))?;
+            let old_q = if schema.is_empty() {
+                quote_bracket(old)
+            } else {
+                format!("{}.{}", quote_bracket(schema), quote_bracket(old))
+            };
+            let old_lit = old_q.replace('\'', "''");
+            let new_lit = new.replace('\'', "''");
+            conn.execute_script(
+                &format!("EXEC sp_rename N'{}', N'{}'", old_lit, new_lit),
+                Some(std::time::Duration::from_secs(30)),
+            )
+            .await
+            .map_err(|e| EngineError::general(format!("mssql rename table: {}", e)))?;
+        }
+        "postgresql" | "postgres" | "pgsql" => {
+            let ep =
+                mycat3_pgclient::parse_pg_jdbc_url(&ds_cfg.url, &ds_cfg.user, &ds_cfg.password)
+                    .map_err(|e| EngineError::general(format!("postgres datasource: {}", e)))?;
+            let mut conn = mycat3_pgclient::PgConnection::connect(&ep)
+                .await
+                .map_err(|e| EngineError::general(format!("postgres connect failed: {}", e)))?;
+            let old_q = if schema.is_empty() {
+                quote_double(old)
+            } else {
+                format!("{}.{}", quote_double(schema), quote_double(old))
+            };
+            conn.query(&format!(
+                "ALTER TABLE {} RENAME TO {}",
+                old_q,
+                quote_double(new)
+            ))
+            .await
+            .map_err(|e| EngineError::general(format!("postgres rename table: {}", e)))?;
+        }
+        "oracle" => {
+            let cfg =
+                mycat3_oracle::config_from_jdbc_url(&ds_cfg.url, &ds_cfg.user, &ds_cfg.password)
+                    .map_err(|e| EngineError::general(format!("oracle datasource: {}", e)))?;
+            let mut conn = mycat3_oracle::connect_direct(cfg)
+                .await
+                .map_err(|e| EngineError::general(format!("oracle connect failed: {}", e)))?;
+            let old_q = if schema.is_empty() {
+                quote_double(old)
+            } else {
+                format!("{}.{}", quote_double(schema), quote_double(old))
+            };
+            conn.execute_tx(&format!(
+                "ALTER TABLE {} RENAME TO {}",
+                old_q,
+                quote_double(new)
+            ))
+            .await
+            .map_err(|e| EngineError::general(format!("oracle rename table: {}", e)))?;
+        }
+        _ => {
+            let old_q = if schema.is_empty() {
+                format!("`{}`", old)
+            } else {
+                format!("`{}`.`{}`", schema, old)
+            };
+            let new_q = if schema.is_empty() {
+                format!("`{}`", new)
+            } else {
+                format!("`{}`.`{}`", schema, new)
+            };
+            execute_on_target(
+                state,
+                target,
+                &format!("RENAME TABLE {} TO {}", old_q, new_q),
+            )
+            .await?;
+        }
+    }
     Ok(())
 }
 
@@ -2117,11 +2387,7 @@ async fn rename_table(
         if old_phys.eq_ignore_ascii_case(new_phys) {
             continue;
         }
-        let ddl = format!(
-            "RENAME TABLE `{}`.`{}` TO `{}`.`{}`",
-            ps, old_phys, ps, new_phys
-        );
-        execute_on_target(state, target, &ddl).await?;
+        rename_physical_node(state, target, ps, old_phys, new_phys).await?;
     }
 
     // 2. 配置热更新（表名键 + 物理命名中的逻辑名替换）

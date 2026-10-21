@@ -82,7 +82,10 @@ mysql -h127.0.0.1 -P8066 -uroot -p123456 -Ddb1
 
 ## DDL 配置自动化（对应 Java MycatRouterConfigOps / CreateTableSQLHandler）
 
-DDL 不仅执行物理语句，还会**自动维护逻辑库表配置**（写盘 + 元数据热更新 + 物理建库建表）：
+DDL 不仅执行物理语句，还会**自动维护逻辑库表配置**（写盘 + 元数据热更新 + 物理建库建表）。
+物理表建表支持 MySQL / PostgreSQL / Oracle / SQL Server 四种方言；`CREATE/DROP DATABASE`
+对非 MySQL 后端是逻辑操作（物理 database/schema 由建表惰性创建或由 DBA 预建）；视图物理 DDL
+目前仅 MySQL，其他后端显式报错。
 
 ```sql
 -- 逻辑库（写 schemas/<name>.schema.json，并在 prototype 上建物理库）
@@ -234,7 +237,7 @@ information_schema 查询支持等值 / `DATABASE()` / LIKE 谓词过滤与投�
 --   createUser/dropUser、setSequence、createSchema/dropSchema（同名配置对象）
 /*!mycat:dropDataSource={"name":"ds9"}*/
 /*!mycat:repairPhysicalTable*/;                     -- 按元数据为全部逻辑表补建缺失物理库表（幂等；
-                                                   --   已删除的物理表会重建为空表；Oracle 后端跳过）
+                                                   --   已删除的物理表会重建为空表；支持 MySQL/PG/Oracle/SQL Server）
 
 /*!mycat:setAcceptConnect=0*/;                      -- 停止接受新连接（=1 恢复；Java 同语义）
 /*!mycat:setReadyToCloseSQL{"sql":"select 'ready'"}*/  -- 发布窗口探针：命中该 SQL 即回 OK

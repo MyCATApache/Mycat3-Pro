@@ -13,6 +13,7 @@ use futures_util::TryStreamExt;
 use mycat3_protocol::consts::field_type;
 use tiberius::{Client, ColumnData, ColumnType, Config, EncryptionLevel, QueryItem, Row};
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 use tracing::debug;
 
@@ -39,6 +40,13 @@ pub enum MssqlOutcome {
         columns: Vec<MssqlColumn>,
         rows: Vec<Vec<Option<String>>>,
     },
+}
+
+/// Events emitted by the streaming query task.
+pub enum MssqlStreamEvent {
+    Columns(Vec<MssqlColumn>),
+    Row(Vec<Option<String>>),
+    Error(MssqlError),
 }
 
 pub struct MssqlConnection {
@@ -467,6 +475,67 @@ impl MssqlConnection {
                 Err(_) => Err(MssqlError::Timeout(sql.to_string())),
             },
             None => fut.await,
+        }
+    }
+
+    /// Stream the first result set to a bounded channel.
+    ///
+    /// Returns `Ok(true)` when the stream was fully drained (the connection is
+    /// reusable), `Ok(false)` when the consumer disappeared or the timeout hit
+    /// (the caller must discard the connection). On protocol/SQL errors an
+    /// `Error` event is emitted and `Err` is returned.
+    pub(crate) async fn stream_rows_to(
+        &mut self,
+        sql: &str,
+        timeout: Option<Duration>,
+        tx: mpsc::Sender<MssqlStreamEvent>,
+    ) -> MssqlResult<bool> {
+        let client = &mut self.client;
+        let fut = async {
+            let mut stream = client.simple_query(sql).await.map_err(tiberius_err)?;
+            let mut result_sets = 0usize;
+            while let Some(item) = stream.try_next().await.map_err(tiberius_err)? {
+                match item {
+                    QueryItem::Metadata(meta) => {
+                        result_sets += 1;
+                        if result_sets == 1 {
+                            let cols: Vec<MssqlColumn> = meta
+                                .columns()
+                                .iter()
+                                .map(|c| MssqlColumn {
+                                    name: c.name().to_string(),
+                                    mysql_type: map_column_type(c.column_type()),
+                                })
+                                .collect();
+                            if tx.send(MssqlStreamEvent::Columns(cols)).await.is_err() {
+                                return Ok(false);
+                            }
+                        }
+                    }
+                    QueryItem::Row(row) if result_sets <= 1 => {
+                        let values = render_row(&row)?;
+                        if tx.send(MssqlStreamEvent::Row(values)).await.is_err() {
+                            return Ok(false);
+                        }
+                    }
+                    QueryItem::Row(_) => {}
+                }
+            }
+            Ok(true)
+        };
+        let result = match timeout {
+            Some(t) => match tokio::time::timeout(t, fut).await {
+                Ok(r) => r,
+                Err(_) => Err(MssqlError::Timeout(sql.to_string())),
+            },
+            None => fut.await,
+        };
+        match result {
+            Ok(done) => Ok(done),
+            Err(e) => {
+                let _ = tx.send(MssqlStreamEvent::Error(e)).await;
+                Ok(false)
+            }
         }
     }
 

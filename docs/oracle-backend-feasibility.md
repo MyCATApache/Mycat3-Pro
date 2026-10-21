@@ -92,9 +92,9 @@ sqlparser(MySQL) AST → Oracle 12c+ 文本。逐条给出规则与风险评级�
 
 ## 5. 明确不做的部分（文档化边界）
 
-- **DDL 自动化对 Oracle 后端**：`ddl.rs` 的物理建表生成 MySQL DDL，对 Oracle 数据源停用
-  物理建表（配置热更新照常），物理表由 DBA 手工按 Oracle DDL 创建（与 Java 版 CreateTableUtils
-  只对 MySQL 生效的现状一致）。
+- ~~DDL 自动化对 Oracle 后端~~（已实现）：逻辑 `CREATE TABLE` 生成 Oracle 类型映射、
+  identity、索引与幂等 PL/SQL；`DROP TABLE`/`repairPhysicalTable` 同步支持。视图 DDL 仍
+  仅支持 MySQL，对 Oracle 显式报错而不是静默跳过。
 - **ANO 加密**：rust-oracledb 不支持；`ENCRYPTION_SERVER=REQUIRED` 的实例不可接入（TLS
   端口可行）。文档明确。
 - **XA**：维持本地代理事务（跨 MySQL+Oracle 混合事务不保证原子性）。
@@ -127,7 +127,7 @@ sqlparser(MySQL) AST → Oracle 12c+ 文本。逐条给出规则与风险评级�
 - 实施顺序建议：① 执行层抽象（回归零风险）→ ② 驱动集成 + 池 + 心跳 → ③ 方言翻译层
   （逐条点亮 §4 规则，每条配测试）→ ④ 三前端联调验收。
 
-验收标准：`gvenzl/oracle-free` 容器上手工建分片物理表后，
+验收标准：`gvenzl/oracle-free` 容器上建分片物理表后，
 `mysql/psql/sqlcmd 任一客户端 → Mycat3 Pro → Oracle` 完成
 `insert/select where 分片键/count 归并/事务 begin-commit`，结果与直连 Oracle 一致。
 
@@ -150,5 +150,12 @@ sqlparser(MySQL) AST → Oracle 12c+ 文本。逐条给出规则与风险评级�
 跨后端 `update`/`delete`、事务 `begin-commit`/`begin-rollback`（含落在 Oracle 节点的行）、
 `SET autocommit=0` 隐式事务；Oracle 物理表行数与逻辑视图逐行核对一致。
 
-遗留边界（与 §5 一致）：Oracle 物理建表仍由 DBA 手工执行（DDL 自动化仅 MySQL）；
-ANO 原生加密不可达（TLS 可用）；跨后端混合事务不保证原子性（无 XA）。
+2026-10 增补：Oracle 物理建表已自动化（`translate_oracle_ddl`：`NUMBER/VARCHAR2/CLOB/BLOB/
+TIMESTAMP`、`AUTO_INCREMENT`→identity、`KEY`→`CREATE INDEX`、幂等 PL/SQL；逻辑 `CREATE TABLE`
+→ 自动建 schema/表/索引，`DROP TABLE`/`repairPhysicalTable`/`RENAME TABLE` 均按 Oracle 方言执行）。
+实测（Oracle Free 23ai，用户 MYCAT）：自动建表、identity、索引、单行插入、删表、重命名、
+配置热更新均通过；多行 identity INSERT（INSERT ALL）仍存在 Oracle 侧 identity 分配差异，
+建议显式提供主键或逐行插入。
+
+遗留边界：视图物理 DDL 仍仅支持 MySQL（Oracle 显式报错）；ANO 原生加密不可达（TLS 可用）；
+跨后端混合事务不保证原子性（无 XA）。

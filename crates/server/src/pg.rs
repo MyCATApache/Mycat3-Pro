@@ -22,7 +22,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
-use crate::engine::{execute_sql, EngineColumn, EngineError, EngineOutcome, EngineSession};
+use crate::engine::{
+    execute_sql, execute_sql_streaming, EngineColumn, EngineError, EngineOutcome, EngineSession,
+    EngineStreamOutcome,
+};
 use crate::session::SessionContext;
 use crate::state::ServerState;
 
@@ -618,14 +621,92 @@ impl PgFrontend {
 
     async fn handle_simple_query(&mut self, sql: &str) -> Result<(), PgError> {
         // 简单查询可携带多语句（psql -c "a; b; c" 整体一条 'Q'）：按顶层分号拆分
-        // 逐条执行，末尾统一一次 ReadyForQuery
+        // 逐条执行，末尾统一一次 ReadyForQuery。
+        // 单条语句优先走流式执行（SQL Server 单分片读）；其余保持 buffer-first。
+        let stmts = crate::prepared_text::split_statements(sql);
+        if stmts.len() == 1 {
+            return self.handle_single_simple(&stmts[0]).await;
+        }
         let mut wire = Vec::new();
-        for stmt in crate::prepared_text::split_statements(sql) {
+        for stmt in stmts {
             wire.extend(self.run_simple_statement(&stmt).await?);
         }
         wire.extend(msg_ready(self.tx_status()));
         self.send(&wire).await?;
         Ok(())
+    }
+
+    async fn handle_single_simple(&mut self, sql: &str) -> Result<(), PgError> {
+        if let Some(w) = self.handle_pg_text_prepare(sql).await? {
+            let mut wire = w;
+            wire.extend(msg_ready(self.tx_status()));
+            self.send(&wire).await?;
+            return Ok(());
+        }
+        // 写语句继续走原有执行路径（保留序列填充/事务收尾语义）；只有
+        // 只读语句尝试流式。
+        let first = sql
+            .trim_start()
+            .split(|c: char| c.is_whitespace() || c == '(')
+            .next()
+            .unwrap_or("")
+            .to_ascii_uppercase();
+        if !matches!(first.as_str(), "SELECT" | "VALUES") {
+            let mut wire = self.run_simple_statement(sql).await?;
+            wire.extend(msg_ready(self.tx_status()));
+            self.send(&wire).await?;
+            return Ok(());
+        }
+        match execute_sql_streaming(&self.state, &mut self.sess, sql).await {
+            Ok(EngineStreamOutcome::Outcomes(outcomes)) => {
+                let mut wire = Vec::new();
+                for outcome in &outcomes {
+                    wire.extend(self.encode_outcome(outcome, sql));
+                }
+                wire.extend(msg_ready(self.tx_status()));
+                self.send(&wire).await?;
+                Ok(())
+            }
+            Ok(EngineStreamOutcome::Stream(mut stream)) => {
+                self.send(&msg_row_description(&stream.columns)).await?;
+                let mut batch = Vec::new();
+                loop {
+                    match stream.next_row().await {
+                        Ok(Some(row)) => {
+                            batch.extend(msg_data_row(&stream.columns, &row));
+                            if batch.len() >= 64 * 1024 {
+                                self.send(&batch).await?;
+                                batch.clear();
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            self.state.stats.incr_error();
+                            if !batch.is_empty() {
+                                self.send(&batch).await?;
+                            }
+                            let err = self.encode_error(&e);
+                            self.send(&err).await?;
+                            self.send(&msg_ready(self.tx_status())).await?;
+                            return Ok(());
+                        }
+                    }
+                }
+                batch.extend(msg_command_complete(&select_tag_rows(
+                    stream.rows_read as usize,
+                )));
+                batch.extend(msg_ready(self.tx_status()));
+                self.send(&batch).await?;
+                Ok(())
+            }
+            Err(e) => {
+                self.state.stats.incr_error();
+                let err = self.encode_error(&e);
+                self.send(&err).await?;
+                self.send(&msg_ready(self.tx_status())).await?;
+                Ok(())
+            }
+        }
     }
 
     /// 单条简单语句执行（不含 ReadyForQuery）。

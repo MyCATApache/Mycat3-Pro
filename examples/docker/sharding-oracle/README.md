@@ -1,4 +1,4 @@
-# 分库分表 + Oracle 后端：双 schema、手工物理表与方言差异
+# 分库分表 + Oracle 后端：双 schema、物理 DDL 与方言差异
 
 这个例子用**一个 Oracle Free 实例的两个 schema**（`DB1_0`/`DB1_1`）模拟两个分片，
 由 Mycat3 Pro 通过官方 `rust-oracledb` thin 驱动访问。之所以不启动两个 Oracle 容器，
@@ -116,7 +116,8 @@ Mycat 会把 MySQL 反引号/标识符翻译成 Oracle 双引号并**保留大�
 | 表列 | `"id"`, `"created"` 等（**加引号小写**） | 逻辑 SQL 的列名是小写，翻译后是 `"created"` |
 | 广播表 | `"dict"`（加引号小写） | 广播表物理表名使用逻辑表名 `dict`，不是大写 DICT |
 
-初始化脚本 `init/01-schema.sql` 已按此规则创建。若出现：
+初始化脚本 `init/01-schema.sql` 按此规则预建了演示表；逻辑 `CREATE TABLE` 也会生成
+同样大小写规则的物理对象（未指定 `schemaName` 时使用数据源连接用户）。若出现：
 
 - `ORA-00904: "created": invalid identifier` → 列名大小写不匹配；
 - `ORA-00942: table or view "DB1_0"."dict" does not exist` → 广播表名应为加引号小写 `"dict"`。
@@ -128,7 +129,7 @@ Mycat 会把 MySQL 反引号/标识符翻译成 Oracle 双引号并**保留大�
 | `dbType` | `oracle` |
 | URL | `jdbc:oracle:thin:@//host:1521/FREEPDB1` |
 | 驱动 | rust-oracledb thin，纯 Rust，无需 Oracle Client |
-| 物理建表 | **手工**；Mycat DDL 自动化只对 MySQL 后端生成物理 DDL |
+| 物理建表 | 逻辑 `CREATE TABLE` 自动生成 Oracle DDL（identity/索引/幂等 PL/SQL）；init SQL 可选 |
 | 标识符 | 双引号、大小写敏感；见上一节 |
 | LIMIT | 翻译为 `ROWNUM` 包装 |
 | 多行 INSERT | 翻译为 `INSERT ALL` |
@@ -139,7 +140,7 @@ Mycat 会把 MySQL 反引号/标识符翻译成 Oracle 双引号并**保留大�
 | 日期格式 | 本例 datasource `initSqls` 设置 `NLS_DATE_FORMAT='YYYY-MM-DD HH24:MI:SS'` |
 | 数值显示 | `NUMBER(12,2)` 可能返回 `40` 而不是 `40.00`（字符串化差异，不是精度丢失） |
 
-Oracle 的 `DATE` 同时含日期和时间；物理表用 `DATE`，Mycat 连接初始化 NLS 后，
+Oracle 的 `DATE` 同时含日期和时间；自动 DDL 将 MySQL `DATETIME` 映射为 `TIMESTAMP`；Mycat 连接初始化 NLS 后，
 MySQL 风格的 `'2026-01-01 10:00:00'` 字面量可直接插入。
 
 ## 5. 为什么用两个 schema 而不是两个 Oracle 容器

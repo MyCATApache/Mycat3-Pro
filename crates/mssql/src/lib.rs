@@ -18,6 +18,6 @@ pub mod error;
 pub mod pool;
 
 pub use config::{parse_mssql_jdbc_url, EncryptionMode, MssqlEndpoint};
-pub use conn::{MssqlColumn, MssqlConnection, MssqlOutcome};
+pub use conn::{MssqlColumn, MssqlConnection, MssqlOutcome, MssqlStreamEvent};
 pub use error::{MssqlError, MssqlResult};
-pub use pool::{CheckedOutMssqlConn, MssqlPool};
+pub use pool::{CheckedOutMssqlConn, MssqlPool, MssqlRowStream};

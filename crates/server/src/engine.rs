@@ -103,6 +103,174 @@ impl EngineSession {
     }
 }
 
+/// 引擎侧流式结果：列元数据 + 逐行拉取。
+pub struct EngineRowStream {
+    pub columns: Vec<EngineColumn>,
+    pub column_count: usize,
+    pub rows_read: u64,
+    inner: crate::executor::StreamingResult,
+}
+
+impl EngineRowStream {
+    pub async fn next_row(&mut self) -> Result<Option<Vec<Option<String>>>, EngineError> {
+        let row = self.inner.next_row().await.map_err(|e| {
+            let (errno, sqlstate, message) = e.to_parts();
+            EngineError {
+                errno,
+                sqlstate,
+                message,
+            }
+        })?;
+        if row.is_some() {
+            self.rows_read += 1;
+        }
+        Ok(row)
+    }
+}
+
+/// 单条语句的流式/物化二选一结果。
+pub enum EngineStreamOutcome {
+    Outcomes(Vec<EngineOutcome>),
+    Stream(Box<EngineRowStream>),
+}
+
+/// 尝试以流式方式执行一条（单语句）SQL。
+///
+/// 只有“非代理模式、事务外、单分片、无归并、SQL Server 后端”的读语句
+/// 会返回 `Stream`；其余情况返回与 `execute_sql` 等价的物化结果。
+pub async fn execute_sql_streaming(
+    state: &Arc<ServerState>,
+    sess: &mut EngineSession,
+    sql: &str,
+) -> Result<EngineStreamOutcome, EngineError> {
+    let trace_id = state.stats.queries_total.fetch_add(1, Ordering::Relaxed) + 1;
+    let started = Instant::now();
+    let sql_trim = sql.trim();
+    if sql_trim.is_empty() {
+        return Err(EngineError::new(
+            mycat3_protocol::consts::error_code::ER_EMPTY_QUERY,
+            "42000",
+            "Query was empty",
+        ));
+    }
+    if state.is_proxy_mode() {
+        return Ok(EngineStreamOutcome::Outcomes(
+            execute_sql(state, sess, sql).await?,
+        ));
+    }
+    if let Some(outcome) = state
+        .sql_cache
+        .lookup(
+            sql_trim,
+            sess.ctx.schema.as_deref(),
+            sess.ctx.in_transaction,
+            sess.ctx.autocommit,
+        )
+        .await
+    {
+        return Ok(EngineStreamOutcome::Outcomes(vec![(*outcome).clone()]));
+    }
+    if mycat3_sql::parse_hint(sql_trim).0.is_some() {
+        return Ok(EngineStreamOutcome::Outcomes(
+            execute_sql(state, sess, sql).await?,
+        ));
+    }
+    if let Some(result) = try_local_fast_path(state, &sess.ctx, sql_trim).await {
+        let out = result?;
+        record_slow_sql(
+            state,
+            trace_id,
+            &sess.ctx.user,
+            sess.ctx.schema.as_deref(),
+            sql_trim,
+            engine_rows(&out),
+            started.elapsed(),
+            "",
+        );
+        return Ok(EngineStreamOutcome::Outcomes(vec![out]));
+    }
+    let meta = state.metadata();
+    let routes = match analyse(sql_trim, sess.ctx.schema.as_deref(), &meta) {
+        Ok(r) => r,
+        Err(e) => return Err(sql_error(e)),
+    };
+    if routes.len() != 1 {
+        return Ok(EngineStreamOutcome::Outcomes(
+            execute_sql(state, sess, sql).await?,
+        ));
+    }
+    if let Some(err) = check_disallow(state, &sess.ctx, &routes) {
+        return Err(err);
+    }
+    let route = &routes[0];
+    if route.tasks.len() == 1 && !route.stmt_type.is_write() && route.merge.is_none() {
+        match crate::executor::execute_route_stream(state, &mut sess.ctx, &mut sess.tx, route).await
+        {
+            Ok(Some(inner)) => {
+                let columns: Vec<EngineColumn> = inner
+                    .columns
+                    .iter()
+                    .map(|c| EngineColumn {
+                        name: c.name.clone(),
+                        mysql_type: c.field_type,
+                        charset: c.charset,
+                    })
+                    .collect();
+                return Ok(EngineStreamOutcome::Stream(Box::new(EngineRowStream {
+                    column_count: columns.len(),
+                    columns,
+                    rows_read: 0,
+                    inner,
+                })));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let (errno, sqlstate, message) = e.to_packet_parts();
+                state.stats.incr_error();
+                return Err(EngineError {
+                    errno,
+                    sqlstate,
+                    message,
+                });
+            }
+        }
+    }
+    // 不可流式：直接执行已分析出的路由（避免重复缓存/本地快路径副作用）。
+    let any_ddl = routes
+        .iter()
+        .any(|r| matches!(r.stmt_type, mycat3_sql::StmtType::Ddl));
+    let any_write = routes
+        .iter()
+        .any(|r| r.stmt_type.is_write() || matches!(r.stmt_type, mycat3_sql::StmtType::Ddl));
+    let target = routes
+        .first()
+        .and_then(|r| r.tasks.first())
+        .map(|t| t.target_name.clone())
+        .unwrap_or_default();
+    let mut out = Vec::with_capacity(routes.len());
+    for route in routes {
+        out.push(execute_route_engine(state, sess, &route, sql_trim).await?);
+    }
+    if any_write {
+        invalidate_cache_after_write(state, sess.ctx.schema.as_deref(), sql_trim);
+    }
+    if any_ddl {
+        crate::ddl::refresh_create_sql_after_alter(state, sess.ctx.schema.as_deref(), sql_trim)
+            .await;
+    }
+    record_slow_sql(
+        state,
+        trace_id,
+        &sess.ctx.user,
+        sess.ctx.schema.as_deref(),
+        sql_trim,
+        out.iter().map(engine_rows).sum(),
+        started.elapsed(),
+        &target,
+    );
+    Ok(EngineStreamOutcome::Outcomes(out))
+}
+
 /// 执行一段 SQL（可含多语句），返回每条语句的结果。
 ///
 /// 对应 `MycatdbCommand.executeQuery` + `AbstractMycatProtocolResponse` 的

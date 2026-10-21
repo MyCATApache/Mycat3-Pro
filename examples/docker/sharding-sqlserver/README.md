@@ -181,7 +181,7 @@ NULL 保真。SQL Server `TINYINT` 是 0–255（MySQL TINY 有符号），查�
 | DDL 报 `Permission denied` | 容器以 UID 1000 运行；宿主 UID 不是 1000 时先执行 `sudo chown -R 1000:1000 conf`（CI 已自动处理） |
 | `last_insert_id` 为 0 | 非自增表返回 0；自增表在同一条 INSERT 批次内读取 `SCOPE_IDENTITY()`（无额外往返） |
 | `XA 事务不支持 SQL Server` | 预期行为；SQL Server 分布式事务需 MSDTC，未实现 |
-| 物理表不存在 | 确认 `sqlserver-init` 成功执行；SQL Server 表/schema 手工创建 |
+| 物理表不存在 | 确认 `sqlserver-init` 成功执行，或由逻辑 `CREATE TABLE`/`repairPhysicalTable` 自动创建 |
 | 命名实例连接失败 | 一期只支持 `host:port`；启用 TCP 或改用端口 |
 
 ## 清理

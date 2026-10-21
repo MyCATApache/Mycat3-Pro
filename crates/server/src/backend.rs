@@ -617,7 +617,7 @@ impl BackendSession {
 }
 
 /// SQL Server 错误 → BackendError：SQL 级 → Server（可复用）；连接级 → Conn。
-fn mssql_err(e: MssqlError) -> BackendError {
+pub(crate) fn mssql_err(e: MssqlError) -> BackendError {
     if e.is_conn_level() {
         BackendError::Conn(e.to_string())
     } else {
