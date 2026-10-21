@@ -527,10 +527,10 @@ SNAPSHOT 需数据库开启）。不能映射的显式报错，不能静默降�
 - 流式：5000 行结果经 MySQL CLI / psql / sqlcmd 三种前端完整接收，
   DEBUG 日志均确认进入 `SQL Server streaming result started` 路径。
 
-CI / 镜像验收（2026-10-20）：
+CI / 镜像验收（2026-10-21，v0.3.2）：
 
-- GitHub Actions `CI` run `39449735033`：单元测试 + SQL Server 2022 Compose 集成
+- GitHub Actions `CI` run `39606911776`：374 个单测 + SQL Server 2022 Compose 集成
   （含逻辑 `CREATE TABLE ddl_demo`、索引校验、事务/XA 拒绝、三种前端）全部通过；
-- 镜像 `mycat/mycat3-pro:v0.3.1`、`0.3.1`、`latest` 已发布，多架构
-  manifest digest `sha256:bf931a3d7418f49edfbbe3dee65852d267078b4f8b9387f6d3e78d37a9067149`
-  （`linux/amd64` + `linux/arm64`）。
+- 镜像 `mycat/mycat3-pro:v0.3.2`、`0.3.2`、`latest` 已发布，多架构
+  manifest digest `sha256:066af41088348b218f23de47b6280a98e1208f0a1fe1d3b6ece4aa584f0c07ad`
+  （`linux/amd64` + `linux/arm64`）；Docker Hub Verify 通过并同步简介。
